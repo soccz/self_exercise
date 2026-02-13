@@ -49,6 +49,9 @@ export async function GET(req: Request) {
                 // We selected "*".
                 if (!("telegram_chat_id" in data)) errors.push("Column telegram_chat_id missing");
                 if (!("telegram_remind_enabled" in data)) errors.push("Column telegram_remind_enabled missing");
+                if (!("telegram_last_reminded_date" in data)) errors.push("Column telegram_last_reminded_date missing");
+                if (!("telegram_timezone" in data)) errors.push("Column telegram_timezone missing");
+                if (!("telegram_remind_time" in data)) errors.push("Column telegram_remind_time missing");
             }
         } catch (e: any) {
             errors.push(`DB Connection Failed: ${e.message}`);
