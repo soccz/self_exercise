@@ -721,7 +721,8 @@ export async function POST(req: NextRequest) {
                 try {
                     const { data: user } = await supabaseAdmin.from('users').select('weight').eq('id', MY_ID).single();
                     if (user && user.weight) {
-                        const marketPos = getMarketPosition(logData.name, logData.weight, user.weight);
+                        const bw = Number(user.weight) || 75; // Convert string/number to number
+                        const marketPos = getMarketPosition(logData.name, logData.weight, bw);
                         if (marketPos) {
                             msg += `\n\n${marketPos.message} (${marketPos.index_name})`;
                         }
