@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@theme {
+  --color-toss-blue: #3182f6;
+  --color-toss-blue-light: #e8f3ff;
+  --color-toss-grey-50: #f9fafb;
+  --color-toss-grey-100: #f2f4f6;
+  --color-toss-grey-200: #e5e8eb;
+  --color-toss-grey-300: #d1d6db;
+  --color-toss-grey-400: #b0b8c1;
+  --color-toss-grey-500: #8b95a1;
+  --color-toss-grey-600: #6b7684;
+  --color-toss-grey-700: #4e5968;
+  --color-toss-grey-800: #333d4b;
+  --color-toss-grey-900: #191f28;
+  
+  --font-sans: "Pretendard", -apple-system, BlinkMacSystemFont, system-ui, Roboto, "Helvetica Neue", "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #191f28; /* grey-900 */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #000000;
+    --foreground: #ffffff;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar Hide */
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}

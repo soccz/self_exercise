@@ -1,0 +1,26 @@
+name: telegram-reminder
+
+on:
+  schedule:
+    # Every 10 minutes. The API will only send once/day based on DB settings.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call reminder endpoint
+        env:
+          CRON_ENDPOINT: ${{ secrets.CRON_ENDPOINT }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+        run: |
+          if [ -z "$CRON_ENDPOINT" ]; then
+            echo "Missing CRON_ENDPOINT secret (example: https://<your-domain>/api/cron/remind)"
+            exit 1
+          fi
+          if [ -z "$APP_SECRET" ]; then
+            echo "Missing APP_SECRET secret"
+            exit 1
+          fi
+          curl -fsS -X POST "$CRON_ENDPOINT" -H "x-app-secret: $APP_SECRET"
