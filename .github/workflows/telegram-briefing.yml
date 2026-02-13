@@ -1,0 +1,17 @@
+name: Telegram Briefing (Daily)
+
+on:
+  schedule:
+    # 06:00 UTC = 15:00 KST (Afternoon Briefing before typical workout time)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Pre-Market Briefing Endpoint
+        run: |
+          curl -X POST ${{ secrets.CRON_ENDPOINT || 'https://self-exercise.vercel.app' }}/api/cron/briefing \
+          -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+          -H "x-app-secret: ${{ secrets.APP_SECRET }}"
