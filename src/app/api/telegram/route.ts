@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { parseWorkoutText, analyzePortfolio } from '@/lib/quant/engine';
+import { analyzeMarketCondition } from '@/lib/quant/coach';
 import type { Database } from "@/lib/supabase_database";
 import type { ExerciseLog, Workout } from "@/lib/data/types";
 import { newRequestId } from "@/lib/server/request_id";
@@ -350,21 +351,21 @@ export async function POST(req: NextRequest) {
         // 0. Command: /name <new name>
         if (text.startsWith("/name ")) {
             const newName = text.replace(/^\/name\s+/, "").trim();
-	            if (!newName) {
-	                await sendMessage(chatId, "사용법: `/name 홍길동`");
-	                return json({ ok: true });
-	            }
+            if (!newName) {
+                await sendMessage(chatId, "사용법: `/name 홍길동`");
+                return json({ ok: true });
+            }
             const { error } = await supabaseAdmin
                 .from("users")
                 .upsert({ id: MY_ID, full_name: newName }, { onConflict: "id" });
             if (error) {
                 console.error("Name update error:", error);
                 await sendMessage(chatId, `❌ 이름 변경 실패: ${error.message}`);
-	            } else {
-	                await sendMessage(chatId, `✅ 이름 변경: ${newName}`, true);
-	            }
-	            return json({ ok: true });
-	        }
+            } else {
+                await sendMessage(chatId, `✅ 이름 변경: ${newName}`, true);
+            }
+            return json({ ok: true });
+        }
 
         // 1. Command: /status
         if (text === '/status' || text === '자산') {
@@ -383,10 +384,10 @@ export async function POST(req: NextRequest) {
             if (userError) console.error("Supabase user select error:", userError);
             if (workoutsError) console.error("Supabase workouts select error:", workoutsError);
 
-	            if (!user) {
-	                await sendMessage(chatId, "❌ 사용자 정보가 없습니다. `users` 테이블에 id=me row가 있는지 확인하세요.");
-	                return json({ ok: true });
-	            }
+            if (!user) {
+                await sendMessage(chatId, "❌ 사용자 정보가 없습니다. `users` 테이블에 id=me row가 있는지 확인하세요.");
+                return json({ ok: true });
+            }
 
             const workouts = (workoutRows ?? []).map(mapWorkoutRow);
 
@@ -434,7 +435,7 @@ export async function POST(req: NextRequest) {
                 } else {
                     await sendMessage(chatId, `✅ *Hold 의견*\n\n${advice[0].message}`, true);
                 }
-	            }
+            }
             return json({ ok: true });
         }
 
@@ -671,41 +672,55 @@ export async function POST(req: NextRequest) {
 
         const logData = parseWorkoutText(text, userWeight);
 
-	        if (logData && logData.weight > 0) {
-	            // Save to DB
-                const logs = [{ name: logData.name, weight: logData.weight, reps: logData.reps, sets: logData.sets }];
-                const { error } = await supabaseAdmin.from('workouts').insert({
-                    user_id: MY_ID,
-                    workout_date: new Date().toISOString().split('T')[0],
-                    title: `${logData.name} ${logData.weight}kg`,
-                    logs,
-	                total_volume: logData.weight * logData.reps * logData.sets,
-	                duration_minutes: logData.estimatedDuration,
-	                average_rpe: 8, // Estimate high intensity
-	                mood: 'Good'
-	            });
+        if (logData && logData.weight > 0) {
+            // Save to DB
+            const rpeValue = logData.rpe; // undefined if not provided
+            const logs = [{ name: logData.name, weight: logData.weight, reps: logData.reps, sets: logData.sets, rpe: rpeValue }];
+
+            const { error } = await supabaseAdmin.from('workouts').insert({
+                user_id: MY_ID,
+                workout_date: new Date().toISOString().split('T')[0],
+                title: `${logData.name} ${logData.weight}kg`,
+                logs,
+                total_volume: logData.weight * logData.reps * logData.sets,
+                duration_minutes: logData.estimatedDuration,
+                average_rpe: rpeValue ?? 8, // Use parsed RPE or default to 8
+                mood: 'Good'
+            });
 
             if (error) {
                 console.error("DB Insert Error", error);
                 await sendMessage(chatId, `❌ 기록 실패: ${error.message}\n\n(대부분 users에 id=me가 없거나, 권한/RLS 문제입니다)`);
-	            } else {
-                    try {
-                        await applyBig3Prs(supabaseAdmin, MY_ID, estimateBig3FromLogs(logs));
-                    } catch (e) {
-                        console.error("PR update failed:", e);
-                    }
-	                await sendMessage(chatId, `✅ *운동 기록 완료*\n\n🏋️ ${logData.name}: ${logData.weight}kg x ${logData.sets}세트\n⏱ 예상 시간: ${logData.estimatedDuration}분\n🔥 예상 소모: ${logData.estimatedCalories}kcal\n\n자산 가치(1RM)에 반영되었습니다.`, true);
-	            }
-	        } else {
-	            // Echo or Help
-	            if (text.startsWith('/')) {
-	                await sendMessage(chatId, helpText(), true);
-	            }
-	        }
+            } else {
+                try {
+                    await applyBig3Prs(supabaseAdmin, MY_ID, estimateBig3FromLogs(logs));
+                } catch (e) {
+                    console.error("PR update failed:", e);
+                }
 
-	        return json({ ok: true });
-	    } catch (error) {
-	        console.error("Telegram Webhook Error", error);
-	        return json({ error: "Internal Error" }, { status: 500 });
-	    }
+                // Algo-Trading Coach Logic
+                const coach = analyzeMarketCondition(logs[0]);
+                let msg = `✅ *운동 기록 완료*\n\n🏋️ ${logData.name}: ${logData.weight}kg x ${logData.sets}세트`;
+                if (rpeValue) msg += ` (RPE ${rpeValue})`;
+                msg += `\n⏱ 예상 시간: ${logData.estimatedDuration}분\n🔥 예상 소모: ${logData.estimatedCalories}kcal\n\n자산 가치(1RM)에 반영되었습니다.`;
+
+                // Circuit Breaker Warning
+                if (coach.status === "Overheated") {
+                    msg += `\n\n${coach.message}`;
+                }
+
+                await sendMessage(chatId, msg, true);
+            }
+        } else {
+            // Echo or Help
+            if (text.startsWith('/')) {
+                await sendMessage(chatId, helpText(), true);
+            }
+        }
+
+        return json({ ok: true });
+    } catch (error) {
+        console.error("Telegram Webhook Error", error);
+        return json({ error: "Internal Error" }, { status: 500 });
+    }
 }

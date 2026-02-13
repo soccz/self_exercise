@@ -193,13 +193,24 @@ export interface ParsedWorkout {
     weight: number;
     reps: number;
     sets: number;
+    rpe?: number;
     estimatedDuration: number;
     estimatedCalories: number;
 }
 
-// Format: "Squat 100 5 5" (Name Weight Reps Sets)
+// Format: "Squat 100 5 5 @9" (Name Weight Reps Sets RPE)
 export function parseWorkoutText(text: string, userWeight: number = 75): ParsedWorkout | null {
-    const parts = text.trim().split(/\s+/);
+    let cleanText = text.trim();
+    let rpe: number | undefined;
+
+    // Extract RPE first (syntax: @9 or rpe 9)
+    const rpeMatch = cleanText.match(/(@|rpe\s?)([\d\.]+)/i);
+    if (rpeMatch) {
+        rpe = parseFloat(rpeMatch[2]);
+        cleanText = cleanText.replace(rpeMatch[0], "").trim();
+    }
+
+    const parts = cleanText.split(/\s+/);
     if (parts.length < 2) return null;
 
     const name = parts[0];
@@ -217,7 +228,7 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
         reps = parseFloat(parts[2]);
         sets = 3; // Default to 3 sets if not specified
     }
-    // Pattern 3: Name Weight (e.g., Run 30) - Treat weight as duration/distance context dependent, simplified here
+    // Pattern 3: Name Weight (e.g., Run 30)
     else if (parts.length === 2) {
         weight = parseFloat(parts[1]);
         reps = 1;
@@ -227,19 +238,16 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
     if (isNaN(weight) || isNaN(reps) || isNaN(sets)) return null;
 
     // Auto-Calculate Stats
-    // 1. Estimate Duration: ~3 mins per set (including rest) + 5 min warmup
     const estimatedDuration = (sets * 3) + 5;
 
-    // 2. Estimate Calories
-    // METs: Lifting is roughly 3-6 METs. Hard sets (high weight) -> higher METs.
-    // Simple formula: METs * Weight(kg) * Time(hr)
-    let mets = 4.5; // Moderate lifting
-    if (weight > 60) mets = 6.0; // Heavy lifting capability assumption
+    // METs Calculation
+    let mets = 4.5;
+    if (weight > 60) mets = 6.0;
 
     const durationHours = estimatedDuration / 60;
     const estimatedCalories = Math.round(mets * userWeight * durationHours);
 
-    return { name, weight, reps, sets, estimatedDuration, estimatedCalories };
+    return { name, weight, reps, sets, rpe, estimatedDuration, estimatedCalories };
 }
 
 // Legacy helper if needed
