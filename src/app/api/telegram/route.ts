@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { parseWorkoutText, analyzePortfolio } from '@/lib/quant/engine';
 import { analyzeMarketCondition } from '@/lib/quant/coach';
+import { getMarketPosition, getGhostReplay } from '@/lib/quant/market';
 import type { Database } from "@/lib/supabase_database";
 import type { ExerciseLog, Workout } from "@/lib/data/types";
 import { newRequestId } from "@/lib/server/request_id";
@@ -707,6 +708,29 @@ export async function POST(req: NextRequest) {
                 // Circuit Breaker Warning
                 if (coach.status === "Overheated") {
                     msg += `\n\n${coach.message}`;
+                }
+
+                // Market Index (S&P 500)
+                try {
+                    const { data: user } = await supabaseAdmin.from('users').select('weight').eq('id', MY_ID).single();
+                    if (user && user.weight) {
+                        const marketPos = getMarketPosition(logData.name, logData.weight, user.weight);
+                        if (marketPos) {
+                            msg += `\n\n${marketPos.message} (${marketPos.index_name})`;
+                        }
+                    }
+                } catch (e) {
+                    console.error("Market Index Error", e);
+                }
+
+                // Ghost Replay (YoY)
+                try {
+                    const ghost = await getGhostReplay(supabaseAdmin, MY_ID, logData.name, logData.weight);
+                    if (ghost) {
+                        msg += `\n\n${ghost.message}`;
+                    }
+                } catch (e) {
+                    console.error("Ghost Replay Error", e);
                 }
 
                 await sendMessage(chatId, msg, true);
