@@ -60,6 +60,6 @@ export async function GET(req: Request) {
         ok: errors.length === 0,
         errors,
         status,
-        user_summary: user ? { id: user.id, name: user.full_name } : null
+        user_summary: user ? { id: (user as any).id, name: (user as any).full_name } : null
     }, { status: errors.length ? 500 : 200 });
 }
