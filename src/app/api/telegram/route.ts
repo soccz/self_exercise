@@ -676,16 +676,23 @@ export async function POST(req: NextRequest) {
         if (logData && logData.weight > 0) {
             // Save to DB
             const rpeValue = logData.rpe; // undefined if not provided
-            const logs = [{ name: logData.name, weight: logData.weight, reps: logData.reps, sets: logData.sets, rpe: rpeValue }];
+            // Internal use: expects number | undefined
+            const logs = [{
+                name: logData.name,
+                weight: logData.weight,
+                reps: logData.reps,
+                sets: logData.sets,
+                rpe: rpeValue
+            }];
 
             const { error } = await supabaseAdmin.from('workouts').insert({
                 user_id: MY_ID,
                 workout_date: new Date().toISOString().split('T')[0],
                 title: `${logData.name} ${logData.weight}kg`,
-                logs,
+                logs: logs as any, // Cast to any to bypass strict Json type check for rpe
                 total_volume: logData.weight * logData.reps * logData.sets,
                 duration_minutes: logData.estimatedDuration,
-                average_rpe: rpeValue ?? 8, // Use parsed RPE or default to 8
+                average_rpe: rpeValue ?? 8,
                 mood: 'Good'
             });
 
