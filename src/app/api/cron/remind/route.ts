@@ -159,7 +159,6 @@ export async function POST(req: Request) {
     }
 
     // Mark as reminded. If DB isn't patched yet, this may fail.
-    // Mark as reminded. If DB isn't patched yet, this may fail.
     const { error: patchErr } = await supabase
       .from("users")
       .update({ telegram_last_reminded_date: today })

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin";
 import type { Database } from "@/lib/supabase_database";
+import { requireAppSession } from "@/lib/server/app_lock";
+import { newRequestId } from "@/lib/server/request_id";
 
 export const dynamic = 'force-dynamic';
 
@@ -8,7 +10,15 @@ function errorMessage(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+    const requestId = newRequestId();
+    const session = requireAppSession(req);
+    if (!session.ok) {
+        const res = NextResponse.json({ requestId, ok: false, error: session.error }, { status: session.status });
+        res.headers.set("x-request-id", requestId);
+        return res;
+    }
+
     const errors: string[] = [];
     const status: Record<string, unknown> = {};
 
@@ -55,10 +65,13 @@ export async function GET() {
         }
     }
 
-    return NextResponse.json({
+    const res = NextResponse.json({
+        requestId,
         ok: errors.length === 0,
         errors,
         status,
         user_summary: user ? { id: user.id, name: user.full_name } : null
     }, { status: errors.length ? 500 : 200 });
+    res.headers.set("x-request-id", requestId);
+    return res;
 }
