@@ -35,11 +35,24 @@ jobs:
             exit 1
           fi
 
-          if echo "$BASE_URL" | grep -Eq "/api/cron/remind/?$"; then
-            URL="${BASE_URL%/}"
+          # Logic: If CRON_BASE_URL is set, use it.
+          # If only CRON_ENDPOINT is set, try to extract base.
+          
+          TARGET_PATH="/api/cron/remind"
+          
+          if [ -n "${CRON_BASE_URL:-}" ]; then
+            BASE="$CRON_BASE_URL"
+          elif [ -n "${CRON_ENDPOINT:-}" ]; then
+            # Strip /api/... from the endpoint to get base
+            BASE=$(echo "$CRON_ENDPOINT" | sed 's|/api/.*||')
           else
-            URL="${BASE_URL%/}/api/cron/remind"
+            echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
+            exit 1
           fi
+          
+          # Clean trailing slash
+          BASE="${BASE%/}"
+          URL="$BASE$TARGET_PATH"
 
           echo "POST $URL"
           HTTP_CODE="$(
