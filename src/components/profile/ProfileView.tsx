@@ -19,6 +19,11 @@ export function ProfileView() {
         );
     }
 
+    const total1rm =
+        (user.estimated_1rm_squat || 0) +
+        (user.estimated_1rm_bench || 0) +
+        (user.estimated_1rm_dead || 0);
+
     return (
         <div className="p-5 space-y-8">
             {/* Header */}
@@ -83,6 +88,25 @@ export function ProfileView() {
                 </div>
             </div>
 
+            {/* Body Stats */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-3xl shadow-sm border border-toss-grey-100 dark:border-gray-700 space-y-4">
+                <h3 className="font-bold text-toss-grey-700 dark:text-gray-300">신체 지표</h3>
+                <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-2xl bg-toss-grey-50 dark:bg-gray-900/30 p-4">
+                        <div className="text-xs text-toss-grey-500">체중</div>
+                        <div className="mt-1 text-lg font-bold text-toss-grey-900 dark:text-white">{user.weight ?? 0}kg</div>
+                    </div>
+                    <div className="rounded-2xl bg-toss-grey-50 dark:bg-gray-900/30 p-4">
+                        <div className="text-xs text-toss-grey-500">골격근량</div>
+                        <div className="mt-1 text-lg font-bold text-toss-grey-900 dark:text-white">{user.muscle_mass ?? 0}kg</div>
+                    </div>
+                    <div className="rounded-2xl bg-toss-grey-50 dark:bg-gray-900/30 p-4">
+                        <div className="text-xs text-toss-grey-500">체지방률</div>
+                        <div className="mt-1 text-lg font-bold text-toss-grey-900 dark:text-white">{user.fat_percentage ?? 0}%</div>
+                    </div>
+                </div>
+            </div>
+
             {/* 1RM Box */}
             <div className="bg-toss-grey-50 dark:bg-gray-800/50 p-6 rounded-3xl space-y-4">
                 <h3 className="font-bold text-toss-grey-700 dark:text-gray-300">나의 1RM 추정치</h3>
@@ -102,7 +126,7 @@ export function ProfileView() {
                     <div className="pt-2 border-t border-gray-200 dark:border-gray-700 flex justify-between items-center">
                         <span className="text-toss-grey-900 dark:text-white font-bold">Total</span>
                         <span className="font-bold text-toss-blue text-lg">
-                            {user.estimated_1rm_squat + user.estimated_1rm_bench + user.estimated_1rm_dead}kg
+                            {total1rm}kg
                         </span>
                     </div>
                 </div>

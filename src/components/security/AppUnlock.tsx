@@ -12,7 +12,7 @@ interface AppUnlockProps {
 }
 
 export function AppUnlock({ isOpen, onClose }: AppUnlockProps) {
-  const { error } = useData();
+  const { error, refreshData } = useData();
   const { openUnlock, pushToast } = useUI();
   const [secret, setSecret] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -48,6 +48,15 @@ export function AppUnlock({ isOpen, onClose }: AppUnlockProps) {
       } else {
         pushToast("success", "잠금 해제 완료");
       }
+
+      // Clear "App locked" in the data layer so the modal doesn't immediately re-open.
+      // Also verifies that the new session cookie is actually working.
+      try {
+        await refreshData();
+      } catch {
+        // ignore
+      }
+
       setSecret("");
       onClose();
     } catch (e) {
