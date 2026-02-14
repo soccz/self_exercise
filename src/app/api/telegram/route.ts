@@ -4,6 +4,7 @@ import { parseWorkoutText, analyzePortfolio } from '@/lib/quant/engine';
 import { analyzeMarketCondition } from '@/lib/quant/coach';
 import { getMarketPosition, getGhostReplay } from '@/lib/quant/market';
 import { buildWeeklyTelegramReport } from "@/lib/reports/weekly";
+import { buildMonthlyTelegramReport } from "@/lib/reports/monthly";
 import type { Database, Json } from "@/lib/supabase_database";
 import type { ExerciseLog, Workout } from "@/lib/data/types";
 import { newRequestId } from "@/lib/server/request_id";
@@ -159,6 +160,7 @@ function helpText(): string {
         "- `/edit 스쿼트 105 5 5`: 방금 기록 수정(최근 30분만)",
         "- `/export csv|json`: 데이터 내보내기",
         "- `/week` 또는 `주간`: 주간 리포트",
+        "- `/month` 또는 `월간`: 월간 리포트(지난달)",
         "- `/recompute`: 1RM(3대) 재계산",
         "- `/remind`: 리마인더 설정(상태/ON/OFF/시간/타임존)",
         "- `/remind test`: 리마인더 테스트(즉시 1회)",
@@ -498,6 +500,19 @@ export async function POST(req: NextRequest) {
                 .single();
             const timeZone = (user?.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
             const report = await buildWeeklyTelegramReport(supabaseAdmin, MY_ID, timeZone);
+            await sendMessage(chatId, report.text, true);
+            return json({ ok: true });
+        }
+
+        // 2.3 Command: /month (Monthly report)
+        if (text === "/month" || text === "월간" || text === "월간리포트" || text === "월간 리포트") {
+            const { data: user } = await supabaseAdmin
+                .from("users")
+                .select("telegram_timezone")
+                .eq("id", MY_ID)
+                .single();
+            const timeZone = (user?.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
+            const report = await buildMonthlyTelegramReport(supabaseAdmin, MY_ID, timeZone);
             await sendMessage(chatId, report.text, true);
             return json({ ok: true });
         }

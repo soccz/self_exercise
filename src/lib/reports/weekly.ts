@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase_database";
 
 type WorkoutRow = Database["public"]["Tables"]["workouts"]["Row"];
+type UserRow = Database["public"]["Tables"]["users"]["Row"];
 
 function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number") return value;
@@ -51,6 +52,46 @@ function sparkline(values: number[]): string {
     .join("");
 }
 
+function classifyName(name: string): "upper" | "lower" | "other" {
+  const n = name.toLowerCase();
+  const upper = ["bench", "press", "row", "pull", "pushup", "푸시업", "벤치", "상체", "가슴", "등", "어깨"];
+  const lower = ["squat", "dead", "lunge", "leg", "스쿼트", "데드", "런지", "하체", "다리"];
+  if (upper.some((k) => n.includes(k))) return "upper";
+  if (lower.some((k) => n.includes(k))) return "lower";
+  return "other";
+}
+
+function big3Key(name: string): "squat" | "bench" | "dead" | null {
+  const n = name.toLowerCase();
+  if (["squat", "스쿼트", "백스쿼트", "front squat"].some((k) => n.includes(k))) return "squat";
+  if (["bench", "벤치", "벤치프레스", "bench press"].some((k) => n.includes(k))) return "bench";
+  if (["dead", "데드", "deadlift", "데드리프트"].some((k) => n.includes(k))) return "dead";
+  return null;
+}
+
+function scanBestWeights(rows: Array<Pick<WorkoutRow, "logs">>): Record<"squat" | "bench" | "dead", number> {
+  const best = { squat: 0, bench: 0, dead: 0 };
+  for (const r of rows) {
+    if (!Array.isArray(r.logs)) continue;
+    for (const item of r.logs) {
+      if (!isRecord(item)) continue;
+      const name = typeof item["name"] === "string" ? item["name"] : "";
+      const key = name ? big3Key(name) : null;
+      if (!key) continue;
+      const w = toNumber(item["weight"], 0);
+      if (w > best[key]) best[key] = w;
+    }
+  }
+  return best;
+}
+
+function diffText(curr: number, prev: number): string {
+  const d = curr - prev;
+  if (!Number.isFinite(d) || d === 0) return "=";
+  const sign = d > 0 ? "+" : "";
+  return `${sign}${d}`;
+}
+
 export async function buildWeeklyTelegramReport(
   supabase: SupabaseClient<Database>,
   userId: string,
@@ -60,13 +101,22 @@ export async function buildWeeklyTelegramReport(
   const start = addDays(end, -6);
   const days = Array.from({ length: 7 }, (_v, i) => addDays(start, i));
 
-  const { data: rows, error } = await supabase
-    .from("workouts")
-    .select("workout_date, total_volume, average_rpe, logs, title")
-    .eq("user_id", userId)
-    .gte("workout_date", start)
-    .lte("workout_date", end)
-    .order("workout_date", { ascending: true });
+  const prevStart = addDays(end, -13);
+
+  const [{ data: rows, error }, { data: user, error: uErr }] = await Promise.all([
+    supabase
+      .from("workouts")
+      .select("workout_date, total_volume, average_rpe, logs, title")
+      .eq("user_id", userId)
+      .gte("workout_date", prevStart)
+      .lte("workout_date", end)
+      .order("workout_date", { ascending: true }),
+    supabase
+      .from("users")
+      .select("current_streak, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead")
+      .eq("id", userId)
+      .single(),
+  ]);
 
   if (error) {
     return {
@@ -74,11 +124,21 @@ export async function buildWeeklyTelegramReport(
       meta: { start, end },
     };
   }
+  if (uErr) {
+    return {
+      text: `❌ 주간 리포트 생성 실패: ${uErr.message}`,
+      meta: { start, end },
+    };
+  }
 
   const byDay: Record<string, { count: number; volume: number; rpeSum: number; rpeN: number; names: string[] }> = {};
   for (const d of days) byDay[d] = { count: 0, volume: 0, rpeSum: 0, rpeN: 0, names: [] };
 
-  for (const r of (rows ?? []) as Pick<WorkoutRow, "workout_date" | "total_volume" | "average_rpe" | "logs" | "title">[]) {
+  const all = (rows ?? []) as Pick<WorkoutRow, "workout_date" | "total_volume" | "average_rpe" | "logs" | "title">[];
+  const curRows = all.filter((r) => (r.workout_date ?? "") >= start);
+  const prevRows = all.filter((r) => (r.workout_date ?? "") < start);
+
+  for (const r of curRows) {
     const d = r.workout_date ?? "";
     if (!byDay[d]) continue;
     byDay[d].count += 1;
@@ -103,6 +163,47 @@ export async function buildWeeklyTelegramReport(
     if (n <= 0) return null;
     return sum / n;
   })();
+
+  // Upper/lower ratio (approx) for this week
+  let upperVol = 0;
+  let lowerVol = 0;
+  for (const r of curRows) {
+    const v = toNumber(r.total_volume, 0);
+    let upperHits = 0;
+    let lowerHits = 0;
+    if (Array.isArray(r.logs)) {
+      for (const item of r.logs) {
+        if (!isRecord(item)) continue;
+        const name = typeof item["name"] === "string" ? item["name"] : "";
+        const cls = name ? classifyName(name) : "other";
+        if (cls === "upper") upperHits += 1;
+        if (cls === "lower") lowerHits += 1;
+      }
+    } else if (typeof r.title === "string") {
+      const cls = classifyName(r.title);
+      if (cls === "upper") upperHits += 1;
+      if (cls === "lower") lowerHits += 1;
+    }
+    if (upperHits > lowerHits) upperVol += v;
+    else if (lowerHits > upperHits) lowerVol += v;
+  }
+  const ratio = (() => {
+    const denom = upperVol + lowerVol;
+    if (denom <= 0) return null;
+    const u = Math.round((upperVol / denom) * 100);
+    const l = 100 - u;
+    return { u, l };
+  })();
+
+  // Big3 best weights: this week vs last week
+  const bestCur = scanBestWeights(curRows);
+  const bestPrev = scanBestWeights(prevRows);
+
+  const streak = toNumber((user as Pick<UserRow, "current_streak"> | null)?.current_streak, 0);
+  const squat1 = toNumber((user as Pick<UserRow, "estimated_1rm_squat"> | null)?.estimated_1rm_squat, 0);
+  const bench1 = toNumber((user as Pick<UserRow, "estimated_1rm_bench"> | null)?.estimated_1rm_bench, 0);
+  const dead1 = toNumber((user as Pick<UserRow, "estimated_1rm_dead"> | null)?.estimated_1rm_dead, 0);
+  const total1 = Math.round(squat1 + bench1 + dead1);
 
   // Top names (roughly: most frequent token)
   const freq: Record<string, number> = {};
@@ -133,10 +234,15 @@ export async function buildWeeklyTelegramReport(
   lines.push(`- 총 볼륨: *${Math.round(totalVolume).toLocaleString()}kg*`);
   if (avgRpeAll !== null) lines.push(`- 평균 RPE: *${avgRpeAll.toFixed(1)}*`);
   lines.push(`- 볼륨 스파크: \`${sparkline(volumes)}\``);
+  if (ratio) lines.push(`- 상/하 비중(볼륨): 상체 ${ratio.u}% | 하체 ${ratio.l}%`);
+  lines.push(
+    `- Big3 최고(주간): S ${bestCur.squat} (${diffText(bestCur.squat, bestPrev.squat)}) | B ${bestCur.bench} (${diffText(bestCur.bench, bestPrev.bench)}) | D ${bestCur.dead} (${diffText(bestCur.dead, bestPrev.dead)})`,
+  );
+  lines.push(`- 현재 3대 1RM: Total ${total1} (S ${Math.round(squat1)}, B ${Math.round(bench1)}, D ${Math.round(dead1)})`);
+  lines.push(`- 스트릭: ${streak}일`);
   if (top.length > 0) lines.push(`- Top: ${top.map((t) => `\`${t}\``).join(", ")}`);
   lines.push("");
   lines.push(`💬 *다음 액션*: ${advice}`);
 
   return { text: lines.join("\n"), meta: { start, end } };
 }
-

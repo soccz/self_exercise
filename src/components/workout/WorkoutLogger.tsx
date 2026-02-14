@@ -13,33 +13,91 @@ interface WorkoutLoggerProps {
 }
 
 export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
-    const { saveWorkout, recentWorkouts } = useData();
+    const { saveWorkout, recentWorkouts, user } = useData();
     const { pushToast } = useUI();
     const [title, setTitle] = useState("오늘의 운동");
+    const [raw, setRaw] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async () => {
         const normalizedTitle = title.trim();
-        if (!normalizedTitle) return;
+        const normalizedRaw = raw.trim();
+        if (!normalizedTitle && !normalizedRaw) return;
 
         setIsSubmitting(true);
         try {
-            const parsed = parseWorkoutText(normalizedTitle);
+            const userWeight = user?.weight || 75;
+            const lines = normalizedRaw
+                ? normalizedRaw
+                    .split(/\r?\n/)
+                    .map((l) => l.trim())
+                    .filter(Boolean)
+                    .map((l) => l.replace(/^[-*]\s+/, ""))
+                : [];
 
-            // Use parsed data or defaults if parsing failed
-            const workoutData = parsed && parsed.weight > 0 ? {
-                title: `${parsed.name} ${parsed.weight}kg`,
-                total_volume: parsed.weight * parsed.reps * parsed.sets,
-                average_rpe: 8,
-                duration_minutes: parsed.estimatedDuration,
-                logs: [{ name: parsed.name, weight: parsed.weight, reps: parsed.reps, sets: parsed.sets }],
-            } : {
-                title: normalizedTitle,
-                total_volume: 0,
-                average_rpe: 6,
-                duration_minutes: 45,
-                logs: [],
-            };
+            const bad: string[] = [];
+            const parsedLogs = lines
+                .filter((l) => /\d/.test(l))
+                .map((l) => {
+                    const p = parseWorkoutText(l, userWeight);
+                    if (!p || p.weight <= 0) {
+                        bad.push(l);
+                        return null;
+                    }
+                    return p;
+                })
+                .filter(Boolean);
+
+            if (bad.length > 0) {
+                pushToast("error", `해석 실패: ${bad.slice(0, 3).join(" / ")}${bad.length > 3 ? " ..." : ""}`);
+                return;
+            }
+
+            const workoutData = (() => {
+                if (parsedLogs.length === 0) {
+                    // Fallback: try parsing the title as a single entry
+                    const p = parseWorkoutText(normalizedTitle, userWeight);
+                    if (p && p.weight > 0) {
+                        return {
+                            title: normalizedTitle || `${p.name} ${p.weight}kg`,
+                            total_volume: p.weight * p.reps * p.sets,
+                            average_rpe: 8,
+                            duration_minutes: p.estimatedDuration,
+                            logs: [{ name: p.name, weight: p.weight, reps: p.reps, sets: p.sets, rpe: p.rpe }],
+                        };
+                    }
+                    return {
+                        title: normalizedTitle || "오늘의 운동",
+                        total_volume: 0,
+                        average_rpe: 6,
+                        duration_minutes: 45,
+                        logs: [],
+                    };
+                }
+
+                const logs = parsedLogs.map((p) => ({
+                    name: p!.name,
+                    weight: p!.weight,
+                    reps: p!.reps,
+                    sets: p!.sets,
+                    rpe: p!.rpe,
+                }));
+                const totalVol = logs.reduce((acc, l) => acc + l.weight * l.reps * l.sets, 0);
+                const duration = parsedLogs.reduce((acc, p) => acc + (p?.estimatedDuration ?? 0), 0);
+                const avgRpe = (() => {
+                    const rpes = logs.map((l) => (typeof l.rpe === "number" && Number.isFinite(l.rpe) ? l.rpe : 8));
+                    const sum = rpes.reduce((a, b) => a + b, 0);
+                    return rpes.length ? sum / rpes.length : 8;
+                })();
+
+                return {
+                    title: normalizedTitle || `Batch (${logs.length})`,
+                    total_volume: totalVol,
+                    average_rpe: avgRpe,
+                    duration_minutes: duration || 0,
+                    logs,
+                };
+            })();
 
             const ok = await saveWorkout({
                 workout_date: new Date().toISOString().split("T")[0],
@@ -50,7 +108,8 @@ export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
             if (ok) {
                 pushToast("success", "운동 기록 저장 완료");
                 onClose();
-                setTitle(""); // Reset form
+                setTitle("오늘의 운동"); // Reset form
+                setRaw("");
             } else {
                 pushToast("error", "기록 저장 실패");
             }
@@ -97,16 +156,26 @@ export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
                         {/* Form Content */}
                         <div className="space-y-6">
                             <div>
-                                <label className="block text-sm font-medium text-gray-500 mb-1">운동 기록 (예: 스쿼트 100 5 5)</label>
+                                <label className="block text-sm font-medium text-gray-500 mb-1">제목</label>
                                 <input
                                     type="text"
                                     value={title}
                                     onChange={(e) => setTitle(e.target.value)}
-                                    placeholder="스쿼트 100 5 5"
+                                    placeholder="오늘의 운동"
                                     className="w-full text-xl font-bold border-b-2 border-gray-200 focus:border-toss-blue outline-none py-2 bg-transparent dark:text-white dark:border-gray-700 placeholder-gray-300"
                                 />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-500 mb-1">운동 기록 (여러 줄 가능)</label>
+                                <textarea
+                                    value={raw}
+                                    onChange={(e) => setRaw(e.target.value)}
+                                    placeholder={"스쿼트 100 5 5\n벤치 60x10x5 @9\n데드 120 5 5"}
+                                    className="w-full min-h-28 resize-y border border-gray-200 dark:border-gray-700 rounded-2xl px-4 py-3 bg-transparent dark:text-white placeholder-gray-300"
+                                />
                                 <p className="text-xs text-gray-400 mt-2">
-                                    Tip: &quot;종목 무게 횟수 세트&quot; 순서로 적으면 자동 계산됩니다.
+                                    Tip: `벤치 60x10x5`, `벤치 60 10 5`, `@9` 모두 지원합니다.
                                 </p>
                             </div>
 
@@ -114,9 +183,14 @@ export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
                                 <button
                                     onClick={() => {
                                         const last = recentWorkouts[0];
-                                        const log = last?.logs?.[0];
-                                        if (log?.name && Number.isFinite(log.weight) && Number.isFinite(log.reps) && Number.isFinite(log.sets)) {
-                                            setTitle(`${log.name} ${log.weight} ${log.reps} ${log.sets}`);
+                                        const logs = last?.logs ?? [];
+                                        const lines = logs
+                                            .filter((l) => l?.name && Number.isFinite(l.weight) && Number.isFinite(l.reps) && Number.isFinite(l.sets))
+                                            .slice(0, 12)
+                                            .map((l) => `${l.name} ${l.weight} ${l.reps} ${l.sets}${l.rpe ? ` @${l.rpe}` : ""}`);
+                                        if (lines.length > 0) {
+                                            setTitle(last?.title || "오늘의 운동");
+                                            setRaw(lines.join("\n"));
                                             return;
                                         }
                                         if (last?.title) setTitle(last.title);
@@ -126,19 +200,19 @@ export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
                                     마지막 기록 불러오기
                                 </button>
                                 <button
-                                    onClick={() => setTitle("스쿼트 100 5 5")}
+                                    onClick={() => setRaw("스쿼트 100 5 5")}
                                     className="rounded-2xl border border-toss-grey-100 bg-white px-3 py-2 text-xs font-bold text-toss-grey-700 shadow-sm active:scale-[0.99] transition dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
                                 >
                                     스쿼트 템플릿
                                 </button>
                                 <button
-                                    onClick={() => setTitle("벤치 60 10 5")}
+                                    onClick={() => setRaw("벤치 60x10x5")}
                                     className="rounded-2xl border border-toss-grey-100 bg-white px-3 py-2 text-xs font-bold text-toss-grey-700 shadow-sm active:scale-[0.99] transition dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
                                 >
                                     벤치 템플릿
                                 </button>
                                 <button
-                                    onClick={() => setTitle("데드 120 5 5")}
+                                    onClick={() => setRaw("데드 120 5 5")}
                                     className="rounded-2xl border border-toss-grey-100 bg-white px-3 py-2 text-xs font-bold text-toss-grey-700 shadow-sm active:scale-[0.99] transition dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
                                 >
                                     데드 템플릿
@@ -146,20 +220,27 @@ export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
                             </div>
 
                             {/* Preview Card */}
-                            {title.trim() && (
+                            {(raw.trim() || title.trim()) && (
                                 <div className="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-2xl border border-dashed border-gray-300 dark:border-gray-600">
                                     {(() => {
-                                        const parsed = parseWorkoutText(title);
-                                        if (parsed && parsed.weight > 0) {
+                                        const userWeight = user?.weight || 75;
+                                        const lines = raw
+                                            .split(/\r?\n/)
+                                            .map((l) => l.trim())
+                                            .filter(Boolean)
+                                            .map((l) => l.replace(/^[-*]\s+/, ""))
+                                            .filter((l) => /\d/.test(l));
+                                        const parsed = lines.map((l) => parseWorkoutText(l, userWeight)).filter((p) => p && p.weight > 0);
+                                        if (parsed.length > 0) {
+                                            const vol = parsed.reduce((acc, p) => acc + (p!.weight * p!.reps * p!.sets), 0);
                                             return (
                                                 <div className="text-sm space-y-1">
-                                                    <div className="font-bold text-toss-blue dark:text-blue-400">✅ 자동 분석됨</div>
-                                                    <div className="text-gray-600 dark:text-gray-300">
-                                                        🏋️ {parsed.name}: {parsed.weight}kg × {parsed.reps}회 × {parsed.sets}세트
+                                                    <div className="font-bold text-toss-blue dark:text-blue-400">✅ 자동 분석됨 ({parsed.length}줄)</div>
+                                                    <div className="text-gray-600 dark:text-gray-300 whitespace-pre-line">
+                                                        {parsed.slice(0, 5).map((p, i) => `${i + 1}) ${p!.name}: ${p!.weight} x ${p!.reps} x ${p!.sets}${p!.rpe ? ` @${p!.rpe}` : ""}`).join("\n")}
+                                                        {parsed.length > 5 ? `\n... +${parsed.length - 5}` : ""}
                                                     </div>
-                                                    <div className="text-gray-500 text-xs">
-                                                        ⏱ 예상 {parsed.estimatedDuration}분 | 🔥 {parsed.estimatedCalories}kcal
-                                                    </div>
+                                                    <div className="text-gray-500 text-xs">총 볼륨: {Math.round(vol).toLocaleString()}kg</div>
                                                 </div>
                                             );
                                         } else {
@@ -177,7 +258,7 @@ export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
                             {/* Submit Button */}
                             <button
                                 onClick={handleSubmit}
-                                disabled={isSubmitting || !title.trim()}
+                                disabled={isSubmitting || (!title.trim() && !raw.trim())}
                                 className="w-full bg-toss-blue text-white py-4 rounded-2xl font-bold text-lg flex items-center justify-center space-x-2 active:scale-[0.98] transition-all disabled:opacity-50"
                             >
                                 {isSubmitting ? (
