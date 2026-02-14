@@ -368,6 +368,50 @@ export async function POST(req: NextRequest) {
             return json({ ok: true });
         }
 
+        // 0.1 Command: /set <key> <value>
+        // Keys: weight(몸무게), muscle(골격근), fat(체지방)
+        if (text.startsWith("/set ")) {
+            const parts = text.replace(/^\/set\s+/, "").trim().split(/\s+/);
+            if (parts.length < 2) {
+                await sendMessage(chatId, "사용법: `/set weight 75` 또는 `/set muscle 35`");
+                return json({ ok: true });
+            }
+            const key = parts[0].toLowerCase();
+            const val = parseFloat(parts[1]);
+
+            if (isNaN(val)) {
+                await sendMessage(chatId, "❌ 숫자를 입력해주세요.");
+                return json({ ok: true });
+            }
+
+            const updatePayload: any = { id: MY_ID };
+            let label = "";
+
+            if (key === "weight" || key === "몸무게" || key === "체중") {
+                updatePayload.weight = val;
+                label = "체중";
+            } else if (key === "muscle" || key === "골격근" || key === "골격근량" || key === "muscle_mass") {
+                updatePayload.muscle_mass = val;
+                label = "골격근량";
+            } else if (key === "fat" || key === "체지방" || key === "체지방률" || key === "fat_percentage") {
+                updatePayload.fat_percentage = val;
+                label = "체지방률";
+                if (val > 0 && val < 1) updatePayload.fat_percentage = val * 100; // Handle 0.15 as 15%
+            } else {
+                await sendMessage(chatId, "지원하는 항목: weight, muscle, fat");
+                return json({ ok: true });
+            }
+
+            const { error } = await supabaseAdmin.from("users").upsert(updatePayload, { onConflict: "id" });
+
+            if (error) {
+                await sendMessage(chatId, `❌ 변경 실패: ${error.message}`);
+            } else {
+                await sendMessage(chatId, `✅ ${label} 업데이트: ${updatePayload[Object.keys(updatePayload)[1]]}`, true);
+            }
+            return json({ ok: true });
+        }
+
         // 1. Command: /status
         if (text === '/status' || text === '자산') {
             const { data: user, error: userError } = await supabaseAdmin
