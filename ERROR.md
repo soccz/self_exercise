@@ -15,10 +15,8 @@ This file is a snapshot of what we found, fixed, and what is still pending.
 - Fixed by removing `any`, adding minimal guards/types.
 
 ### B. TypeScript (strict)
-- We run `tsc --noEmit` for correctness, but note:
-  - `tsconfig.json` includes `.next/types/**/*.ts`.
-  - If you run `tsc` before running `next build` (or without existing `.next/types`), you can get TS6053 "file not found" errors.
-  - Workaround: run `npm run build` first, or keep `.next/types` out of `include` if you want standalone `tsc`.
+- We run `tsc --noEmit` for correctness.
+- `tsconfig.json` now excludes `.next/` so `npm run typecheck` works even on a fresh clone (no TS6053 missing `.next/types`).
 
 ### C. Next build (Turbopack issue)
 - `next build` with Turbopack previously crashed:
@@ -118,8 +116,8 @@ Untracked:
 1. In browser, open `https://<domain>/api/user` and confirm numeric fields change after saving.
 2. If 401 "App locked": unlock via `/profile` lock UI (POST `/api/session`) or send `x-app-secret` for scripts.
 3. If 500: open `https://<domain>/api/debug/deployment` and read `errors`.
+   - Note: debug endpoints are protected by app lock when `APP_SECRET` is enabled; unlock first if you get 401 "App locked".
 
 ### B. GitHub Actions reminder debug
 1. Copy the Actions run log JSON response from the curl step.
 2. Also verify the printed `POST <url>` line is exactly `.../api/cron/remind`.
-
