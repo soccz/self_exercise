@@ -1,6 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { Database } from "@/lib/supabase_database";
-import { ExerciseLog, Workout } from "@/lib/data/types";
+import { ExerciseLog } from "@/lib/data/types";
 
 // --- Types ---
 type MarketBriefing = {
@@ -17,15 +17,34 @@ type MarketCondition = {
 };
 
 // --- Helper: Parsing ---
-function parseLogs(logs: any[]): ExerciseLog[] {
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+function parseLogs(logs: unknown): ExerciseLog[] {
     if (!Array.isArray(logs)) return [];
-    return logs.map((l) => ({
-        name: l.name,
-        weight: Number(l.weight),
-        reps: Number(l.reps),
-        sets: Number(l.sets),
-        rpe: l.rpe ? Number(l.rpe) : undefined,
-    }));
+
+    const out: ExerciseLog[] = [];
+    for (const item of logs) {
+        if (!isRecord(item)) continue;
+        const name = typeof item.name === "string" ? item.name : "";
+        if (!name) continue;
+        const weight = Number(item.weight);
+        const reps = Number(item.reps);
+        const sets = Number(item.sets);
+        if (!Number.isFinite(weight) || !Number.isFinite(reps) || !Number.isFinite(sets)) continue;
+
+        const rpeRaw = item.rpe;
+        const rpe = rpeRaw === undefined || rpeRaw === null ? undefined : Number(rpeRaw);
+        out.push({
+            name,
+            weight,
+            reps,
+            sets,
+            rpe: rpe !== undefined && Number.isFinite(rpe) ? rpe : undefined,
+        });
+    }
+    return out;
 }
 
 // --- Core Logic 1: Pre-Market Briefing (Trend Analysis) ---
@@ -37,7 +56,7 @@ export async function analyzePreMarket(
     // Strategy: Find the Big 3 lift that hasn't been done for the longest time (but within 10 days).
     const { data: recentWorkouts } = await supabase
         .from("workouts")
-        .select("*")
+        .select("id, workout_date, logs")
         .eq("user_id", userId)
         .order("workout_date", { ascending: false })
         .limit(10); // Look back 10 sessions
@@ -54,6 +73,7 @@ export async function analyzePreMarket(
 
     // Scan history to find last occurrence of each lift
     for (const w of recentWorkouts) {
+        if (!w.workout_date) continue;
         const logs = parseLogs(w.logs);
         for (const lift of lifts) {
             if (lastDates[lift]) continue; // Already found most recent
@@ -67,7 +87,7 @@ export async function analyzePreMarket(
 
     // Find the lift that is "Due" (oldest date, but exists)
     let targetLift = "";
-    let oldestDate = new Date().toISOString();
+    let oldestDate = new Date().toISOString().split("T")[0] ?? "";
     let lastSession: { date: string; log: ExerciseLog; id: string } | null = null;
 
     for (const lift of lifts) {

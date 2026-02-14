@@ -17,6 +17,10 @@ export type GhostReplay = {
     message: string;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
 // --- Core Logic 1: Market Index (Strength Standards) ---
 // Simplified Standards (Multiplier of Bodyweight)
 const STANDARDS: Record<string, { intermediate: number; advanced: number; elite: number }> = {
@@ -98,19 +102,26 @@ export async function getGhostReplay(
     if (!workouts || workouts.length === 0) return null;
 
     // Helper to parse logs
-    const parseLogs = (logs: any[]): ExerciseLog[] => {
+    const parseLogs = (logs: unknown): ExerciseLog[] => {
         if (!Array.isArray(logs)) return [];
-        return logs.map((l) => ({
-            name: l.name,
-            weight: Number(l.weight),
-            reps: Number(l.reps),
-            sets: Number(l.sets),
-        }));
+        const out: ExerciseLog[] = [];
+        for (const item of logs) {
+            if (!isRecord(item)) continue;
+            const name = typeof item.name === "string" ? item.name : "";
+            if (!name) continue;
+            const weight = Number(item.weight);
+            const reps = Number(item.reps);
+            const sets = Number(item.sets);
+            if (!Number.isFinite(weight) || !Number.isFinite(reps) || !Number.isFinite(sets)) continue;
+            out.push({ name, weight, reps, sets });
+        }
+        return out;
     };
 
     let ghostLog: { date: string; weight: number } | null = null;
 
     for (const w of workouts) {
+        if (!w.workout_date) continue;
         const logs = parseLogs(w.logs);
         const match = logs.find(l => l.name.toLowerCase().includes(liftName.toLowerCase()));
         if (match && match.weight > 0) {

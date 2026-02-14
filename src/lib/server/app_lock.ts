@@ -77,7 +77,13 @@ export function hasValidSession(req: Request): boolean {
   const [payload, sig] = cookie.split(".");
   if (!payload || !sig) return false;
   const expected = hmac(secret, payload);
-  return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  // timingSafeEqual throws when lengths differ; treat as invalid instead of 500.
+  if (sig.length !== expected.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
 }
 
 export function requireAppSession(
@@ -88,8 +94,16 @@ export function requireAppSession(
 
   // Allow header-based auth for scripts/curl
   const provided = req.headers.get("x-app-secret");
-  if (provided && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(secret))) {
-    return { ok: true };
+  if (provided) {
+    if (provided.length === secret.length) {
+      try {
+        if (crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(secret))) {
+          return { ok: true };
+        }
+      } catch {
+        // fall through to cookie check
+      }
+    }
   }
 
   if (hasValidSession(req)) return { ok: true };

@@ -156,9 +156,12 @@ export async function POST(req: Request) {
     }
 
     // Mark as reminded. If DB isn't patched yet, this may fail.
+    // Mark as reminded. If DB isn't patched yet, this may fail.
     const { error: patchErr } = await supabase
       .from("users")
-      .upsert({ id: SINGLE_PLAYER_ID, telegram_last_reminded_date: today }, { onConflict: "id" });
+      .update({ telegram_last_reminded_date: today })
+      .eq("id", SINGLE_PLAYER_ID);
+
     if (patchErr) {
       console.error("cron remind: failed to update telegram_last_reminded_date", patchErr);
       return json(

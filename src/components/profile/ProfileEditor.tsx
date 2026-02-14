@@ -14,7 +14,19 @@ interface ProfileEditorProps {
 function toNumberOrUndefined(value: string): number | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
-  const n = Number(trimmed);
+
+  // Accept common human inputs like "75", "75.5", "75kg", "1,234", "75,5".
+  // If both "," and "." exist, treat "," as thousands separator; otherwise treat "," as decimal separator.
+  let normalized = trimmed.replace(/\s+/g, "");
+  if (normalized.includes(",") && normalized.includes(".")) {
+    normalized = normalized.replace(/,/g, "");
+  } else if (normalized.includes(",") && !normalized.includes(".")) {
+    normalized = normalized.replace(/,/g, ".");
+  }
+
+  const match = normalized.match(/[-+]?\d*\.?\d+/);
+  if (!match) return undefined;
+  const n = Number(match[0]);
   return Number.isFinite(n) ? n : undefined;
 }
 
@@ -58,14 +70,35 @@ export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
   const handleSave = async () => {
     if (!canSubmit) return;
 
+    const invalid: string[] = [];
+    const parseField = (label: string, raw: string): number | undefined => {
+      const t = raw.trim();
+      if (!t) return undefined;
+      const n = toNumberOrUndefined(t);
+      if (n === undefined) invalid.push(label);
+      return n;
+    };
+
+    const weight = parseField("체중", form.weight);
+    const muscle_mass = parseField("골격근량", form.muscleMass);
+    const fat_percentage = parseField("체지방률", form.fatPercentage);
+    const estimated_1rm_squat = parseField("스쿼트 1RM", form.squat);
+    const estimated_1rm_bench = parseField("벤치 1RM", form.bench);
+    const estimated_1rm_dead = parseField("데드 1RM", form.dead);
+
+    if (invalid.length > 0) {
+      pushToast("error", `숫자 형식이 올바르지 않습니다: ${invalid.join(", ")}`);
+      return;
+    }
+
     const success = await saveUser({
       full_name: form.fullName.trim(),
-      weight: toNumberOrUndefined(form.weight),
-      muscle_mass: toNumberOrUndefined(form.muscleMass),
-      fat_percentage: toNumberOrUndefined(form.fatPercentage),
-      estimated_1rm_squat: toNumberOrUndefined(form.squat),
-      estimated_1rm_bench: toNumberOrUndefined(form.bench),
-      estimated_1rm_dead: toNumberOrUndefined(form.dead),
+      weight,
+      muscle_mass,
+      fat_percentage,
+      estimated_1rm_squat,
+      estimated_1rm_bench,
+      estimated_1rm_dead,
     });
 
     if (success) {

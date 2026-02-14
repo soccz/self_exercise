@@ -15,6 +15,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class SupabaseDataProvider implements DataProvider {
+    private shouldBypassFallback(err: unknown): boolean {
+        // If the server explicitly rejects the write (app lock), do not fall back to direct Supabase writes.
+        // Otherwise `APP_SECRET` becomes meaningless when anon has write grants.
+        const msg = err instanceof Error ? err.message : String(err);
+        return msg === "App locked";
+    }
     async getUser(id: string): Promise<User | null> {
         // Prefer server API (service role) so UI works even when RLS blocks anon reads.
         try {
@@ -131,7 +137,8 @@ export class SupabaseDataProvider implements DataProvider {
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error || "Failed to save workout");
             return;
-        } catch {
+        } catch (e) {
+            if (this.shouldBypassFallback(e)) throw e;
             // Fallback to direct Supabase client.
         }
 
@@ -162,7 +169,8 @@ export class SupabaseDataProvider implements DataProvider {
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error || "Failed to delete workout");
             return;
-        } catch {
+        } catch (e) {
+            if (this.shouldBypassFallback(e)) throw e;
             // Fallback to direct Supabase client.
         }
 
@@ -185,7 +193,8 @@ export class SupabaseDataProvider implements DataProvider {
             const json = await res.json();
             if (!res.ok) throw new Error(json?.error || "Failed to save user");
             return;
-        } catch {
+        } catch (e) {
+            if (this.shouldBypassFallback(e)) throw e;
             // Fallback to direct Supabase client.
         }
 

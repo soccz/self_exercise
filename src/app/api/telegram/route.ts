@@ -3,7 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { parseWorkoutText, analyzePortfolio } from '@/lib/quant/engine';
 import { analyzeMarketCondition } from '@/lib/quant/coach';
 import { getMarketPosition, getGhostReplay } from '@/lib/quant/market';
-import type { Database } from "@/lib/supabase_database";
+import type { Database, Json } from "@/lib/supabase_database";
 import type { ExerciseLog, Workout } from "@/lib/data/types";
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
@@ -29,6 +29,7 @@ function getSupabaseAdmin() {
 }
 
 type WorkoutRow = Database["public"]["Tables"]["workouts"]["Row"];
+type UserInsert = Database["public"]["Tables"]["users"]["Insert"];
 
 function getSupabaseRefFromUrl(url: string) {
     try {
@@ -384,8 +385,9 @@ export async function POST(req: NextRequest) {
                 return json({ ok: true });
             }
 
-            const updatePayload: any = { id: MY_ID };
+            const updatePayload: UserInsert = { id: MY_ID };
             let label = "";
+            let storedValue = val;
 
             if (key === "weight" || key === "몸무게" || key === "체중") {
                 updatePayload.weight = val;
@@ -394,9 +396,10 @@ export async function POST(req: NextRequest) {
                 updatePayload.muscle_mass = val;
                 label = "골격근량";
             } else if (key === "fat" || key === "체지방" || key === "체지방률" || key === "fat_percentage") {
-                updatePayload.fat_percentage = val;
+                storedValue = val;
+                if (val > 0 && val < 1) storedValue = val * 100; // Handle 0.15 as 15%
+                updatePayload.fat_percentage = storedValue;
                 label = "체지방률";
-                if (val > 0 && val < 1) updatePayload.fat_percentage = val * 100; // Handle 0.15 as 15%
             } else {
                 await sendMessage(chatId, "지원하는 항목: weight, muscle, fat");
                 return json({ ok: true });
@@ -407,7 +410,7 @@ export async function POST(req: NextRequest) {
             if (error) {
                 await sendMessage(chatId, `❌ 변경 실패: ${error.message}`);
             } else {
-                await sendMessage(chatId, `✅ ${label} 업데이트: ${updatePayload[Object.keys(updatePayload)[1]]}`, true);
+                await sendMessage(chatId, `✅ ${label} 업데이트: ${storedValue}`, true);
             }
             return json({ ok: true });
         }
@@ -729,11 +732,22 @@ export async function POST(req: NextRequest) {
                 rpe: rpeValue
             }];
 
+            const logsJson: Json = logs.map((l) => {
+                const obj: Record<string, Json> = {
+                    name: l.name,
+                    weight: l.weight,
+                    reps: l.reps,
+                    sets: l.sets,
+                };
+                if (l.rpe !== undefined) obj.rpe = l.rpe;
+                return obj;
+            });
+
             const { error } = await supabaseAdmin.from('workouts').insert({
                 user_id: MY_ID,
                 workout_date: new Date().toISOString().split('T')[0],
                 title: `${logData.name} ${logData.weight}kg`,
-                logs: logs as any, // Cast to any to bypass strict Json type check for rpe
+                logs: logsJson,
                 total_volume: logData.weight * logData.reps * logData.sets,
                 duration_minutes: logData.estimatedDuration,
                 average_rpe: rpeValue ?? 8,

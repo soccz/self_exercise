@@ -56,7 +56,8 @@ export async function POST(req: Request) {
 
   const { error } = await supabase
     .from("workouts")
-    .insert({ user_id: SINGLE_PLAYER_ID, ...body });
+    // Enforce single-player user id (do not allow client override).
+    .insert({ ...(body as Record<string, unknown>), user_id: SINGLE_PLAYER_ID });
 
   if (error) {
     const res = NextResponse.json({ error: error.message }, { status: 500 });

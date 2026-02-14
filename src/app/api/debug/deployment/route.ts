@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin";
+import type { Database } from "@/lib/supabase_database";
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: Request) {
+function errorMessage(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+}
+
+export async function GET() {
     const errors: string[] = [];
-    const status: Record<string, any> = {};
+    const status: Record<string, unknown> = {};
 
     // 1. Env Check
     const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -25,7 +30,7 @@ export async function GET(req: Request) {
     if (!APP_SECRET) errors.push("Missing APP_SECRET");
     if (!BOT_TOKEN) errors.push("Missing TELEGRAM_BOT_TOKEN");
 
-    let user = null;
+    let user: Pick<Database["public"]["Tables"]["users"]["Row"], "id" | "full_name"> | null = null;
     if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
         try {
             const supabase = getSupabaseAdmin();
@@ -33,7 +38,7 @@ export async function GET(req: Request) {
 
             const { data, error } = await supabase
                 .from("users")
-                .select("*")
+                .select("id, full_name, telegram_chat_id, telegram_remind_enabled, telegram_last_reminded_date, telegram_timezone, telegram_remind_time")
                 .eq("id", SINGLE_PLAYER_ID)
                 .single();
 
@@ -43,18 +48,9 @@ export async function GET(req: Request) {
             } else {
                 status.db_user_found = true;
                 user = data;
-
-                // Check columns existence by checking keys in returned object
-                // Note: if column is null it exists. If undefined, it might not exist or not selected.
-                // We selected "*".
-                if (!("telegram_chat_id" in data)) errors.push("Column telegram_chat_id missing");
-                if (!("telegram_remind_enabled" in data)) errors.push("Column telegram_remind_enabled missing");
-                if (!("telegram_last_reminded_date" in data)) errors.push("Column telegram_last_reminded_date missing");
-                if (!("telegram_timezone" in data)) errors.push("Column telegram_timezone missing");
-                if (!("telegram_remind_time" in data)) errors.push("Column telegram_remind_time missing");
             }
-        } catch (e: any) {
-            errors.push(`DB Connection Failed: ${e.message}`);
+        } catch (e: unknown) {
+            errors.push(`DB Connection Failed: ${errorMessage(e)}`);
             status.db_connected = false;
         }
     }
@@ -63,6 +59,6 @@ export async function GET(req: Request) {
         ok: errors.length === 0,
         errors,
         status,
-        user_summary: user ? { id: (user as any).id, name: (user as any).full_name } : null
+        user_summary: user ? { id: user.id, name: user.full_name } : null
     }, { status: errors.length ? 500 : 200 });
 }

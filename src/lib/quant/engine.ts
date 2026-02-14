@@ -4,23 +4,6 @@ import { Workout } from "../data/types";
 // 1. Asset Value Logic (The "Stock Price" of your Body)
 // ===============================
 
-// Base value: 1kg of 1RM = $10 (arbitrary unit)
-// Multipliers for different lifts to normalize difficulty
-const VALUE_MULTIPLIERS = {
-    // Lower Body
-    squat: 1.0,
-    deadlift: 1.0,
-    lunge: 0.8,
-    // Upper Body
-    bench: 1.2, // Harder to increase raw weight than squat
-    overhead_press: 1.5,
-    row: 1.2,
-    pullup: 1.5, // Bodyweight + added weight
-    pushup: 0.5, // High rep, lower load usually
-    // Core
-    plank: 2.0 // Per minute?
-};
-
 export interface BodyAsset {
     name: string;
     currentValue: number; // Estimated 1RM or Volume Capacity
@@ -30,16 +13,12 @@ export interface BodyAsset {
 }
 
 /**
- * Calculate the "Total Market Cap" of the user's body
+ * Total 1RM (Big 3) in kg.
+ *
+ * Note: numeric columns may be strings (Supabase). Callers should normalize first.
  */
 export function calculateTotalAssetValue(userStats: { squat: number, bench: number, dead: number }): number {
-    // Simple 3-major lifts valuation
-    // In future, this updates dynamically based on workout logs
-    const squatVal = userStats.squat * 10 * VALUE_MULTIPLIERS.squat;
-    const benchVal = userStats.bench * 10 * VALUE_MULTIPLIERS.bench;
-    const deadVal = userStats.dead * 10 * VALUE_MULTIPLIERS.deadlift;
-
-    return Math.round(squatVal + benchVal + deadVal);
+    return Math.round((userStats.squat || 0) + (userStats.bench || 0) + (userStats.dead || 0));
 }
 
 
@@ -213,20 +192,33 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
     const parts = cleanText.split(/\s+/);
     if (parts.length < 2) return null;
 
-    const name = parts[0];
+    let name = parts[0];
     let weight = 0, reps = 0, sets = 1;
 
-    // Pattern 1: Name Weight Reps Sets (e.g., Squat 100 5 5)
+    // Pattern 1: Name... Weight Reps Sets (supports multi-word exercise names)
+    // e.g. "벤치 프레스 60 10 5", "Back Squat 100 5 5"
     if (parts.length >= 4) {
-        weight = parseFloat(parts[1]);
-        reps = parseFloat(parts[2]);
-        sets = parseFloat(parts[3]);
+        name = parts.slice(0, -3).join(" ");
+        weight = parseFloat(parts[parts.length - 3]);
+        reps = parseFloat(parts[parts.length - 2]);
+        sets = parseFloat(parts[parts.length - 1]);
     }
-    // Pattern 2: Name Weight Reps (Sets default to 3)
+    // Pattern 2: Name... Weight Reps (Sets default to 3)
     else if (parts.length === 3) {
-        weight = parseFloat(parts[1]);
-        reps = parseFloat(parts[2]);
-        sets = 3; // Default to 3 sets if not specified
+        const w = parseFloat(parts[1]);
+        const r = parseFloat(parts[2]);
+        if (!isNaN(w) && !isNaN(r)) {
+            name = parts.slice(0, -2).join(" ");
+            weight = w;
+            reps = r;
+            sets = 3; // Default to 3 sets if not specified
+        } else {
+            // Pattern 2b: Name... Weight (e.g. "벤치 프레스 60")
+            name = parts.slice(0, -1).join(" ");
+            weight = parseFloat(parts[parts.length - 1]);
+            reps = 1;
+            sets = 1;
+        }
     }
     // Pattern 3: Name Weight (e.g., Run 30)
     else if (parts.length === 2) {
