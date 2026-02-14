@@ -24,7 +24,7 @@ interface DataContextType {
     refreshData: () => Promise<void>;
     saveWorkout: (workout: WorkoutDraft) => Promise<boolean>;
     deleteWorkout: (id: string) => Promise<boolean>;
-    saveUser: (patch: UserPatch) => Promise<boolean>;
+    saveUser: (patch: UserPatch) => Promise<{ ok: true } | { ok: false; error: string }>;
     isLoading: boolean;
     offlineQueueSize: number;
 }
@@ -39,7 +39,7 @@ const DataContext = createContext<DataContextType>({
     refreshData: async () => { },
     saveWorkout: async () => false,
     deleteWorkout: async () => false,
-    saveUser: async () => false,
+    saveUser: async () => ({ ok: false, error: "Not ready" }),
     isLoading: true,
     recoveryStatus: { need: false, reasons: [] },
     offlineQueueSize: 0,
@@ -205,26 +205,30 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
         }
     }, [provider, refreshData]);
 
-    const saveUser = useCallback(async (patch: UserPatch) => {
+    const saveUser = useCallback(
+        async (patch: UserPatch): Promise<{ ok: true } | { ok: false; error: string }> => {
         setIsLoading(true);
         setError(null);
         try {
             await provider.saveUser(MY_ID, patch);
             await refreshData();
-            return true;
+            return { ok: true };
         } catch (error) {
             console.error("Failed to save user:", error);
             if (shouldQueueOffline(error)) {
                 enqueueUserPatch(patch);
                 refreshQueueSize();
-                return true;
+                return { ok: true };
             }
-            setError(error instanceof Error ? error.message : "Failed to save user");
-            return false;
+            const msg = error instanceof Error ? error.message : "Failed to save user";
+            setError(msg);
+            return { ok: false, error: msg };
         } finally {
             setIsLoading(false);
         }
-    }, [provider, refreshData]);
+        },
+        [provider, refreshData],
+    );
 
     const deleteWorkout = useCallback(async (id: string) => {
         setIsLoading(true);

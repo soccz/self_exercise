@@ -13,6 +13,11 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+function escapeTelegramMarkdown(text: string): string {
+  // parse_mode: "Markdown" (legacy). Escape the few special characters it supports.
+  return text.replace(/([\\_*`\[\]])/g, "\\$1");
+}
+
 function getClientKey(req: Request): string {
   const xf = req.headers.get("x-forwarded-for");
   if (xf) return xf.split(",")[0]?.trim() || "unknown";
@@ -106,7 +111,7 @@ export async function POST(req: Request) {
     const enabled = Boolean(user?.telegram_remind_enabled);
     const time = (user?.telegram_remind_time ?? "21:00").trim();
     const timeZone = (user?.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
-    const name = user?.full_name ?? "Iron Quant";
+    const name = escapeTelegramMarkdown(user?.full_name ?? "Iron Quant");
 
     if (!BOT_TOKEN) {
       return json(requestId, { requestId, ok: false, error: "TELEGRAM_BOT_TOKEN not set" }, { status: 500 });

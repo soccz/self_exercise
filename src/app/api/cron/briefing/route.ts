@@ -10,6 +10,11 @@ export const dynamic = "force-dynamic";
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const APP_URL = process.env.APP_URL || "https://self-exercise.vercel.app";
 
+function escapeTelegramMarkdown(text: string): string {
+    // parse_mode: "Markdown" (legacy). Escape the few special characters it supports.
+    return text.replace(/([\\_*`\[\]])/g, "\\$1");
+}
+
 function getClientKey(req: Request): string {
     const xf = req.headers.get("x-forwarded-for");
     if (xf) return xf.split(",")[0]?.trim() || "unknown";
@@ -128,9 +133,10 @@ export async function POST(req: Request) {
 
         // 6. Send Telegram Message
         const icon = briefing.trend === "Bullish" ? "📈" : briefing.trend === "Bearish" ? "📉" : "⚖";
+        const safeName = escapeTelegramMarkdown(user.full_name ?? "Iron Quant");
         const msg = [
             `*🔔 Iron Quant 장전(Pre-Market) 브리핑*`,
-            `기준: ${user.full_name ?? "Iron Quant"} 포트폴리오`,
+            `기준: ${safeName} 포트폴리오`,
             ``,
             `*${briefing.ticker} (Target)*`,
             `${icon} 추세: *${briefing.trend}*`,

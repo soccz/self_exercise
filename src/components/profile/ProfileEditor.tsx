@@ -32,7 +32,7 @@ function toNumberOrUndefined(value: string): number | undefined {
 
 export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
   const { user, saveUser, isLoading, error } = useData();
-  const { pushToast } = useUI();
+  const { pushToast, openUnlock } = useUI();
 
   const [form, setForm] = useState({
     fullName: "",
@@ -91,7 +91,7 @@ export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
       return;
     }
 
-    const success = await saveUser({
+    const res = await saveUser({
       full_name: form.fullName.trim(),
       weight,
       muscle_mass,
@@ -101,11 +101,16 @@ export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
       estimated_1rm_dead,
     });
 
-    if (success) {
+    if (res.ok) {
       pushToast("success", "내 정보 저장 완료");
       onClose();
     } else {
-      pushToast("error", "저장 실패 (로그를 확인하세요)");
+      if (res.error === "App locked") {
+        pushToast("error", "잠금 해제가 필요합니다");
+        openUnlock();
+        return;
+      }
+      pushToast("error", res.error || "저장 실패");
     }
   };
 
