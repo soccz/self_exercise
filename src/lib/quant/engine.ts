@@ -203,8 +203,8 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
     let cleanText = text.trim();
     let rpe: number | undefined;
 
-    // Extract RPE first (syntax: @9 or rpe 9)
-    const rpeMatch = cleanText.match(/(@|rpe\s?)([\d\.]+)/i);
+    // Extract RPE first (syntax: @9 or rpe 9, or fullwidth @)
+    const rpeMatch = cleanText.match(/(@|＠|rpe\s?)([\d\.]+)/i);
     if (rpeMatch) {
         rpe = parseFloat(rpeMatch[2]);
         cleanText = cleanText.replace(rpeMatch[0], "").trim();
