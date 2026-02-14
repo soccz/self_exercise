@@ -17,5 +17,6 @@ export const supabase = isValidUrl(supabaseUrl) && supabaseKey
 export const isSupabaseConfigured = isValidUrl(supabaseUrl) && !!supabaseKey;
 
 // The One and Only User ID
+// The One and Only User ID
 // The One and Only User ID (Fixed UUID for Single Player)
-export const MY_ID = '00000000-0000-0000-0000-000000000000';
+export const MY_ID = 'me';
