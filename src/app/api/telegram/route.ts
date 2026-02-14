@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { parseWorkoutText, analyzePortfolio } from '@/lib/quant/engine';
 import { analyzeMarketCondition } from '@/lib/quant/coach';
 import { getMarketPosition, getGhostReplay } from '@/lib/quant/market';
+import { buildWeeklyTelegramReport } from "@/lib/reports/weekly";
 import type { Database, Json } from "@/lib/supabase_database";
 import type { ExerciseLog, Workout } from "@/lib/data/types";
 import { newRequestId } from "@/lib/server/request_id";
@@ -157,6 +158,7 @@ function helpText(): string {
         "- `/undo`: 방금 기록한 운동 되돌리기(최근 30분만)",
         "- `/edit 스쿼트 105 5 5`: 방금 기록 수정(최근 30분만)",
         "- `/export csv|json`: 데이터 내보내기",
+        "- `/week` 또는 `주간`: 주간 리포트",
         "- `/recompute`: 1RM(3대) 재계산",
         "- `/remind`: 리마인더 설정(상태/ON/OFF/시간/타임존)",
         "- `/remind test`: 리마인더 테스트(즉시 1회)",
@@ -487,6 +489,19 @@ export async function POST(req: NextRequest) {
             return json({ ok: true });
         }
 
+        // 2.2 Command: /week (Weekly report)
+        if (text === "/week" || text === "주간" || text === "주간리포트" || text === "주간 리포트") {
+            const { data: user } = await supabaseAdmin
+                .from("users")
+                .select("telegram_timezone")
+                .eq("id", MY_ID)
+                .single();
+            const timeZone = (user?.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
+            const report = await buildWeeklyTelegramReport(supabaseAdmin, MY_ID, timeZone);
+            await sendMessage(chatId, report.text, true);
+            return json({ ok: true });
+        }
+
         // 2.5 Command: /last
         if (text === "/last") {
             const { data: rows, error } = await supabaseAdmin
@@ -718,19 +733,60 @@ export async function POST(req: NextRequest) {
                 ? Number(weightRaw) || 75
                 : 75;
 
-        const logData = parseWorkoutText(text, userWeight);
+        const parseLines = (raw: string): { ok: true; logs: ReturnType<typeof parseWorkoutText>[] } | { ok: false; bad: string[] } => {
+            const rawLines = raw
+                .split(/\r?\n/)
+                .map((l) => l.trim())
+                .filter(Boolean)
+                .map((l) => l.replace(/^[-*]\s+/, ""));
 
-        if (logData && logData.weight > 0) {
+            const logs: ReturnType<typeof parseWorkoutText>[] = [];
+            const bad: string[] = [];
+            for (const line of rawLines) {
+                if (!/\d/.test(line)) continue; // Allow headers like "오늘 운동"
+                const parsed = parseWorkoutText(line, userWeight);
+                if (parsed && parsed.weight > 0) {
+                    logs.push(parsed);
+                } else {
+                    bad.push(line);
+                }
+            }
+            if (bad.length > 0) return { ok: false, bad };
+            return { ok: true, logs };
+        };
+
+        const parsedLines = parseLines(text);
+        const parsedLogs = parsedLines.ok ? parsedLines.logs : [];
+
+        if (!parsedLines.ok) {
+            await sendMessage(
+                chatId,
+                [
+                    "❌ 일부 줄을 해석하지 못했습니다.",
+                    "",
+                    ...parsedLines.bad.slice(0, 5).map((l) => `- \`${l}\``),
+                    parsedLines.bad.length > 5 ? `- ... +${parsedLines.bad.length - 5}` : "",
+                    "",
+                    "예시:",
+                    "- `스쿼트 100 5 5`",
+                    "- `벤치 60x10x5 @9`",
+                    "- 여러 종목은 줄바꿈으로 입력:",
+                    "  `스쿼트 100 5 5`",
+                    "  `벤치 60 10 5`",
+                ].filter(Boolean).join("\n"),
+            );
+            return json({ ok: true });
+        }
+
+        if (parsedLogs.length > 0) {
             // Save to DB
-            const rpeValue = logData.rpe; // undefined if not provided
-            // Internal use: expects number | undefined
-            const logs = [{
-                name: logData.name,
-                weight: logData.weight,
-                reps: logData.reps,
-                sets: logData.sets,
-                rpe: rpeValue
-            }];
+            const logs = parsedLogs.map((l) => ({
+                name: l!.name,
+                weight: l!.weight,
+                reps: l!.reps,
+                sets: l!.sets,
+                rpe: l!.rpe,
+            }));
 
             const logsJson: Json = logs.map((l) => {
                 const obj: Record<string, Json> = {
@@ -743,14 +799,26 @@ export async function POST(req: NextRequest) {
                 return obj;
             });
 
+            const today = new Date().toISOString().split('T')[0];
+            const title = logs.length === 1
+                ? `${logs[0]?.name ?? ""} ${logs[0]?.weight ?? 0}kg`
+                : `Telegram batch (${logs.length})`;
+            const totalVolume = logs.reduce((acc, l) => acc + (l.weight * l.reps * l.sets), 0);
+            const duration = parsedLogs.reduce((acc, l) => acc + (l?.estimatedDuration ?? 0), 0);
+            const avgRpe = (() => {
+                const rpes = logs.map((l) => (typeof l.rpe === "number" && Number.isFinite(l.rpe) ? l.rpe : 8));
+                const sum = rpes.reduce((a, b) => a + b, 0);
+                return rpes.length ? sum / rpes.length : 8;
+            })();
+
             const { error } = await supabaseAdmin.from('workouts').insert({
                 user_id: MY_ID,
-                workout_date: new Date().toISOString().split('T')[0],
-                title: `${logData.name} ${logData.weight}kg`,
+                workout_date: today,
+                title,
                 logs: logsJson,
-                total_volume: logData.weight * logData.reps * logData.sets,
-                duration_minutes: logData.estimatedDuration,
-                average_rpe: rpeValue ?? 8,
+                total_volume: totalVolume,
+                duration_minutes: duration || undefined,
+                average_rpe: avgRpe,
                 mood: 'Good'
             });
 
@@ -765,22 +833,36 @@ export async function POST(req: NextRequest) {
                 }
 
                 // Algo-Trading Coach Logic
-                const coach = analyzeMarketCondition(logs[0]);
-                let msg = `✅ *운동 기록 완료*\n\n🏋️ ${logData.name}: ${logData.weight}kg x ${logData.sets}세트`;
-                if (rpeValue) msg += ` (RPE ${rpeValue})`;
-                msg += `\n⏱ 예상 시간: ${logData.estimatedDuration}분\n🔥 예상 소모: ${logData.estimatedCalories}kcal\n\n자산 가치(1RM)에 반영되었습니다.`;
+                const overheated = logs.map((l) => analyzeMarketCondition(l as ExerciseLog)).find((c) => c.status === "Overheated");
+                const header = logs.length === 1 ? "✅ *운동 기록 완료*" : `✅ *운동 기록 완료* (${logs.length}종목)`;
+                const items = logs
+                    .slice(0, 10)
+                    .map((l, i) => {
+                        const rpeTxt = l.rpe ? ` @${l.rpe}` : "";
+                        return `${i + 1}) ${l.name}: ${l.weight} x ${l.reps} x ${l.sets}${rpeTxt}`;
+                    })
+                    .join("\n");
+                const tail = logs.length > 10 ? `\n... +${logs.length - 10}` : "";
+                let msg = [
+                    header,
+                    "",
+                    items + tail,
+                    "",
+                    `총 볼륨: ${Math.round(totalVolume).toLocaleString()}kg`,
+                    `평균 RPE: ${avgRpe.toFixed(1)}`,
+                    "자산 가치(1RM)에 반영되었습니다.",
+                ].join("\n");
 
                 // Circuit Breaker Warning
-                if (coach.status === "Overheated") {
-                    msg += `\n\n${coach.message}`;
-                }
+                if (overheated?.message) msg += `\n\n${overheated.message}`;
 
                 // Market Index (S&P 500)
                 try {
                     const { data: user } = await supabaseAdmin.from('users').select('weight').eq('id', MY_ID).single();
                     if (user && user.weight) {
                         const bw = Number(user.weight) || 75; // Convert string/number to number
-                        const marketPos = getMarketPosition(logData.name, logData.weight, bw);
+                        const pick = logs[0];
+                        const marketPos = pick ? getMarketPosition(pick.name, pick.weight, bw) : null;
                         if (marketPos) {
                             msg += `\n\n${marketPos.message} (${marketPos.index_name})`;
                         }
@@ -791,7 +873,8 @@ export async function POST(req: NextRequest) {
 
                 // Ghost Replay (YoY)
                 try {
-                    const ghost = await getGhostReplay(supabaseAdmin, MY_ID, logData.name, logData.weight);
+                    const pick = logs[0];
+                    const ghost = pick ? await getGhostReplay(supabaseAdmin, MY_ID, pick.name, pick.weight) : null;
                     if (ghost) {
                         msg += `\n\n${ghost.message}`;
                     }

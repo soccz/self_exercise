@@ -177,9 +177,19 @@ export interface ParsedWorkout {
     estimatedCalories: number;
 }
 
+function splitDigitSeparators(input: string): string {
+    // Turn "60x10x5" / "60×10×5" / "60*10*5" into "60 10 5" without breaking words like "box".
+    let out = input;
+    while (true) {
+        const next = out.replace(/(\d)\s*[xX×*]\s*(\d)/g, "$1 $2");
+        if (next === out) return out;
+        out = next;
+    }
+}
+
 // Format: "Squat 100 5 5 @9" (Name Weight Reps Sets RPE)
 export function parseWorkoutText(text: string, userWeight: number = 75): ParsedWorkout | null {
-    let cleanText = text.trim();
+    let cleanText = text.trim().replace(/^[-*]\s+/, "");
     let rpe: number | undefined;
 
     // Extract RPE first (syntax: @9 or rpe 9, or fullwidth @)
@@ -188,6 +198,8 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
         rpe = parseFloat(rpeMatch[2]);
         cleanText = cleanText.replace(rpeMatch[0], "").trim();
     }
+
+    cleanText = splitDigitSeparators(cleanText);
 
     const parts = cleanText.split(/\s+/);
     if (parts.length < 2) return null;

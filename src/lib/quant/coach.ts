@@ -63,7 +63,13 @@ export async function analyzePreMarket(
 
     if (!recentWorkouts || recentWorkouts.length === 0) return null;
 
-    const lifts = ["Squat", "Bench", "Deadlift", "Overhead Press"];
+    const LIFTS: Array<{ key: "Squat" | "Bench" | "Deadlift" | "Overhead Press"; keywords: string[] }> = [
+        { key: "Squat", keywords: ["squat", "back squat", "front squat", "스쿼트", "백스쿼트", "프론트스쿼트"] },
+        { key: "Bench", keywords: ["bench", "bench press", "벤치", "벤치프레스", "체스트프레스"] },
+        { key: "Deadlift", keywords: ["deadlift", "dl", "데드", "데드리프트"] },
+        // Avoid matching generic "press" (it would catch bench press). Keep shoulder-specific terms.
+        { key: "Overhead Press", keywords: ["overhead press", "ohp", "military press", "숄더프레스", "밀리터리", "오버헤드"] },
+    ];
     const lastDates: Record<string, { date: string; log: ExerciseLog; id: string } | null> = {
         Squat: null,
         Bench: null,
@@ -75,13 +81,13 @@ export async function analyzePreMarket(
     for (const w of recentWorkouts) {
         if (!w.workout_date) continue;
         const logs = parseLogs(w.logs);
-        for (const lift of lifts) {
-            if (lastDates[lift]) continue; // Already found most recent
-            // Fuzzy match name (e.g. "Back Squat" matches "Squat")
-            const match = logs.find((l) => l.name.toLowerCase().includes(lift.toLowerCase()) || (lift === "Overhead Press" && l.name.toLowerCase().includes("press")));
-            if (match) {
-                lastDates[lift] = { date: w.workout_date, log: match, id: w.id };
-            }
+        for (const lift of LIFTS) {
+            if (lastDates[lift.key]) continue; // Already found most recent
+            const match = logs.find((l) => {
+                const n = l.name.toLowerCase();
+                return lift.keywords.some((k) => n.includes(k));
+            });
+            if (match) lastDates[lift.key] = { date: w.workout_date, log: match, id: w.id };
         }
     }
 
@@ -90,12 +96,12 @@ export async function analyzePreMarket(
     let oldestDate = new Date().toISOString().split("T")[0] ?? "";
     let lastSession: { date: string; log: ExerciseLog; id: string } | null = null;
 
-    for (const lift of lifts) {
-        const data = lastDates[lift];
+    for (const lift of LIFTS) {
+        const data = lastDates[lift.key];
         if (data) {
             if (data.date < oldestDate) {
                 oldestDate = data.date;
-                targetLift = lift;
+                targetLift = lift.key;
                 lastSession = data;
             }
         } else {

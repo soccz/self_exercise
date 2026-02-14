@@ -1,0 +1,57 @@
+name: telegram-weekly
+
+on:
+  schedule:
+    # Weekly report: Sunday 12:00 UTC (21:00 KST)
+    - cron: "0 12 * * 0"
+  workflow_dispatch: {}
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call weekly report endpoint
+        env:
+          # Accept either a base URL (recommended) or a full endpoint URL (legacy).
+          CRON_BASE_URL: ${{ secrets.CRON_BASE_URL }}
+          CRON_ENDPOINT: ${{ secrets.CRON_ENDPOINT }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+        run: |
+          set -euo pipefail
+
+          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-}}"
+          BASE_URL="$(printf '%s' "$BASE_URL" | tr -d '\r' | sed 's/^ *//; s/ *$//')"
+
+          if [ -z "${BASE_URL:-}" ]; then
+            echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
+            echo "Examples:"
+            echo "- CRON_BASE_URL: https://<your-domain>"
+            echo "- CRON_ENDPOINT: https://<your-domain>/api/cron/weekly"
+            exit 1
+          fi
+
+          if [ -z "${APP_SECRET:-}" ]; then
+            echo "Missing APP_SECRET secret"
+            exit 1
+          fi
+
+          if echo "$BASE_URL" | grep -Eq "/api/cron/weekly/?$"; then
+            URL="${BASE_URL%/}"
+          else
+            URL="${BASE_URL%/}/api/cron/weekly"
+          fi
+
+          echo "POST $URL"
+          HTTP_CODE="$(
+            curl -sS -D /tmp/weekly_headers.txt -o /tmp/weekly_response.json -w "%{http_code}" \
+              -X POST "$URL" -H "x-app-secret: $APP_SECRET"
+          )"
+          echo "--- headers ---"
+          cat /tmp/weekly_headers.txt || true
+          echo "--- body ---"
+          cat /tmp/weekly_response.json || true
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Request failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
