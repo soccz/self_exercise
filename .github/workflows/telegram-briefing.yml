@@ -11,7 +11,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Call Pre-Market Briefing Endpoint
+        env:
+          # Accept either a base URL (recommended) or a full endpoint URL (legacy).
+          CRON_BASE_URL: ${{ secrets.CRON_BASE_URL }}
+          CRON_ENDPOINT: ${{ secrets.CRON_ENDPOINT }}
+          APP_SECRET: ${{ secrets.APP_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -X POST ${{ secrets.CRON_ENDPOINT || 'https://self-exercise.vercel.app' }}/api/cron/briefing \
-          -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-          -H "x-app-secret: ${{ secrets.APP_SECRET }}"
+          set -euo pipefail
+
+          if [ -z "${APP_SECRET:-}" ]; then
+            echo "Missing APP_SECRET secret"
+            exit 1
+          fi
+
+          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-https://self-exercise.vercel.app}}"
+          BASE_URL="$(printf '%s' "$BASE_URL" | tr -d '\r' | sed 's/^ *//; s/ *$//')"
+          if echo "$BASE_URL" | grep -Eq "/api/cron/briefing/?$"; then
+            URL="${BASE_URL%/}"
+          else
+            URL="${BASE_URL%/}/api/cron/briefing"
+          fi
+
+          AUTH_HEADER=()
+          if [ -n "${CRON_SECRET:-}" ]; then
+            AUTH_HEADER=(-H "Authorization: Bearer $CRON_SECRET")
+          fi
+
+          echo "POST $URL"
+          HTTP_CODE="$(
+            curl -sS -D /tmp/briefing_headers.txt -o /tmp/briefing_response.json -w "%{http_code}" \
+              -X POST "$URL" -H "x-app-secret: $APP_SECRET" "${AUTH_HEADER[@]}"
+          )"
+          echo "--- headers ---"
+          cat /tmp/briefing_headers.txt || true
+          echo "--- body ---"
+          cat /tmp/briefing_response.json || true
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Request failed with HTTP $HTTP_CODE"
+            exit 1
+          fi

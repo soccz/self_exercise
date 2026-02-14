@@ -12,15 +12,45 @@ jobs:
     steps:
       - name: Call reminder endpoint
         env:
+          # Accept either a base URL (recommended) or a full endpoint URL (legacy).
+          CRON_BASE_URL: ${{ secrets.CRON_BASE_URL }}
           CRON_ENDPOINT: ${{ secrets.CRON_ENDPOINT }}
           APP_SECRET: ${{ secrets.APP_SECRET }}
         run: |
-          if [ -z "$CRON_ENDPOINT" ]; then
-            echo "Missing CRON_ENDPOINT secret (example: https://<your-domain>/api/cron/remind)"
+          set -euo pipefail
+
+          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-}}"
+          BASE_URL="$(printf '%s' "$BASE_URL" | tr -d '\r' | sed 's/^ *//; s/ *$//')"
+
+          if [ -z "${BASE_URL:-}" ]; then
+            echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
+            echo "Examples:"
+            echo "- CRON_BASE_URL: https://<your-domain>"
+            echo "- CRON_ENDPOINT: https://<your-domain>/api/cron/remind"
             exit 1
           fi
+
           if [ -z "$APP_SECRET" ]; then
             echo "Missing APP_SECRET secret"
             exit 1
           fi
-          curl -fsS -X POST "$CRON_ENDPOINT" -H "x-app-secret: $APP_SECRET"
+
+          if echo "$BASE_URL" | grep -Eq "/api/cron/remind/?$"; then
+            URL="${BASE_URL%/}"
+          else
+            URL="${BASE_URL%/}/api/cron/remind"
+          fi
+
+          echo "POST $URL"
+          HTTP_CODE="$(
+            curl -sS -D /tmp/remind_headers.txt -o /tmp/remind_response.json -w "%{http_code}" \
+              -X POST "$URL" -H "x-app-secret: $APP_SECRET"
+          )"
+          echo "--- headers ---"
+          cat /tmp/remind_headers.txt || true
+          echo "--- body ---"
+          cat /tmp/remind_response.json || true
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Request failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
