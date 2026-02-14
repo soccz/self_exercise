@@ -4,6 +4,9 @@ import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
 import { analyzePreMarket } from "@/lib/quant/coach";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const APP_URL = process.env.APP_URL || "https://self-exercise.vercel.app";
 

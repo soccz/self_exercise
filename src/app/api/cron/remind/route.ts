@@ -3,6 +3,9 @@ import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin"
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const APP_URL = process.env.APP_URL || "https://self-exercise.vercel.app";
 
