@@ -94,7 +94,7 @@ export function AssetView() {
                 className={cn(
                     "rounded-[2rem] p-7 relative overflow-hidden",
                     isFatLoss
-                        ? "bg-black text-white shadow-2xl"
+                        ? "bg-gradient-to-br from-emerald-50 via-white to-cyan-50 text-slate-900 border border-emerald-100 shadow-xl"
                         : "bg-gradient-to-br from-sky-50 via-white to-indigo-50 text-slate-900 border border-sky-100 shadow-xl",
                 )}
             >
@@ -111,21 +111,21 @@ export function AssetView() {
                 {isFatLoss ? (
                     <div className="relative z-10">
                         <div className="flex items-center justify-between mb-2">
-                            <span className="text-gray-300 font-medium text-sm">주간 유산소 목표 진행률</span>
-                            <div className="text-sm font-bold text-green-300">{week.minutes}/{week.targetMinutes}분</div>
+                            <span className="text-slate-500 font-medium text-sm">주간 유산소 목표 진행률</span>
+                            <div className="text-sm font-bold text-emerald-700">{week.minutes}/{week.targetMinutes}분</div>
                         </div>
                         <div className="text-5xl font-bold tracking-tight">{week.progress}%</div>
-                        <div className="mt-4 h-2.5 rounded-full bg-white/15 overflow-hidden">
-                            <div className="h-full rounded-full bg-gradient-to-r from-emerald-300 to-cyan-300" style={{ width: `${week.progress}%` }} />
+                        <div className="mt-4 h-2.5 rounded-full bg-emerald-100 overflow-hidden">
+                            <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-cyan-400" style={{ width: `${week.progress}%` }} />
                         </div>
 
                         <div className="grid grid-cols-2 gap-4 mt-6">
-                            <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm">
-                                <div className="text-gray-400 text-xs mb-1">주간 추정 소모</div>
+                            <div className="bg-white/85 rounded-2xl p-3 border border-emerald-100">
+                                <div className="text-slate-500 text-xs mb-1">주간 추정 소모</div>
                                 <div className="text-lg font-bold">{Math.round(week.calories).toLocaleString()} kcal</div>
                             </div>
-                            <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm">
-                                <div className="text-gray-400 text-xs mb-1">오늘 추천</div>
+                            <div className="bg-white/85 rounded-2xl p-3 border border-emerald-100">
+                                <div className="text-slate-500 text-xs mb-1">오늘 추천</div>
                                 <div className="text-sm font-bold line-clamp-2">{todayMission || "빠르게 걷기 20분"}</div>
                             </div>
                         </div>
