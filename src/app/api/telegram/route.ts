@@ -1,20 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { parseWorkoutText, analyzePortfolio } from '@/lib/quant/engine';
+import { parseWorkoutText } from '@/lib/quant/engine';
 import { analyzeMarketCondition } from '@/lib/quant/coach';
 import { getMarketPosition, getGhostReplay } from '@/lib/quant/market';
 import { buildWeeklyTelegramReport } from "@/lib/reports/weekly";
 import { buildMonthlyTelegramReport } from "@/lib/reports/monthly";
 import type { Database, Json } from "@/lib/supabase_database";
-import type { ExerciseLog, Workout } from "@/lib/data/types";
+import type { ExerciseLog, GoalMode, Workout } from "@/lib/data/types";
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
 import { applyBig3Prs, estimateBig3FromLogs, recomputeBig3Prs } from "@/lib/server/prs";
+import { analyzeAdviceForGoal, normalizeGoalMode } from "@/lib/goal_mode";
 
 // Telegram Bot Token (from env)
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
 const APP_URL = process.env.APP_URL || "https://self-exercise.vercel.app";
+const BOT_BUILD = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || process.env.npm_package_version || "local";
 
 // Hardcoded User ID for single-player mode
 const MY_ID = 'me';
@@ -105,16 +107,37 @@ async function linkTelegramChat(supabaseAdmin: SupabaseClient<Database>, chatId:
     }
 }
 
-async function sendMessage(chatId: string, text: string, showButton: boolean = false) {
+function quickActionRows(goalMode: GoalMode): string[][] {
+    if (goalMode === "muscle_gain") {
+        return [
+            ["기록", "오늘 추천"],
+            ["마지막 수정", "도움말"],
+        ];
+    }
+    return [
+        ["유산소 기록", "오늘 추천"],
+        ["마지막 수정", "도움말"],
+    ];
+}
+
+async function sendMessage(chatId: string, text: string, showButton: boolean = false, goalMode: GoalMode = "fat_loss") {
     if (!BOT_TOKEN) return;
 
-    const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: 'Markdown' };
+    const body: Record<string, unknown> = {
+        chat_id: chatId,
+        text: showButton ? `${text}\n\n📱 앱: \`${APP_URL}\`` : text,
+        parse_mode: 'Markdown',
+        reply_markup: {
+            keyboard: quickActionRows(goalMode).map((row) => row.map((label) => ({ text: label }))),
+            resize_keyboard: true,
+            is_persistent: true,
+            one_time_keyboard: false,
+            input_field_placeholder: goalMode === "fat_loss" ? "예: 러닝머신 30 1 1" : "예: 스쿼트 100 5 5",
+        },
+    };
+
     if (showButton) {
-        body["reply_markup"] = {
-            inline_keyboard: [[
-                { text: "📱 앱에서 보기", url: APP_URL }
-            ]]
-        };
+        body["disable_web_page_preview"] = true;
     }
 
     try {
@@ -150,10 +173,12 @@ function helpText(): string {
         "",
         "*기록하기*",
         "- `스쿼트 100 5 5` (종목 무게 횟수 세트)",
+        "- `러닝머신 30 1 1` (유산소/시간 기록용)",
         "",
         "*명령어*",
         "- `/status` 또는 `자산`: 자산 리포트",
         "- `/rec` 또는 `추천`: 최근 로그 기반 추천",
+        "- `/mode fat|muscle` 또는 `mode fat|muscle`: 감량/근육 모드 전환",
         "- `/name 홍길동`: 이름 변경",
         "- `/last`: 마지막 운동 확인",
         "- `/undo`: 방금 기록한 운동 되돌리기(최근 30분만)",
@@ -165,6 +190,8 @@ function helpText(): string {
         "- `/remind`: 리마인더 설정(상태/ON/OFF/시간/타임존)",
         "- `/remind test`: 리마인더 테스트(즉시 1회)",
         "- `/debug`: 연결 상태 점검",
+        "",
+        "하단 고정 버튼: 기록 / 오늘 추천 / 마지막 수정 / 도움말",
         "",
         "팁: 웹에서도 기록/수정이 가능합니다.",
     ].join("\n");
@@ -210,7 +237,7 @@ export async function POST(req: NextRequest) {
         }
 
         const chatId = String(message.chat.id);
-        const text: string = message.text.trim();
+        let text: string = message.text.trim();
 
         const rl = rateLimit(`telegram:${chatId}`, 30, 60_000);
         if (!rl.ok) {
@@ -221,9 +248,43 @@ export async function POST(req: NextRequest) {
         await ensureUserRow(supabaseAdmin);
         await linkTelegramChat(supabaseAdmin, chatId);
 
+        const { data: profile } = await supabaseAdmin
+            .from("users")
+            .select("goal_mode")
+            .eq("id", MY_ID)
+            .single();
+        const goalMode = normalizeGoalMode(profile?.goal_mode);
+        const send = async (msg: string, showButton = false) => sendMessage(chatId, msg, showButton, goalMode);
+
+        if (text === "오늘 추천") text = "/rec";
+        if (text === "도움말") text = "/help";
+        if (text === "마지막 수정") {
+            const { data: rows } = await supabaseAdmin
+                .from("workouts")
+                .select("title, logs")
+                .eq("user_id", MY_ID)
+                .order("created_at", { ascending: false })
+                .limit(1);
+            const last = rows?.[0];
+            const first = Array.isArray(last?.logs) ? last?.logs[0] as Record<string, unknown> | undefined : undefined;
+            const example = first && typeof first.name === "string"
+                ? `/edit ${first.name} ${Number(first.weight) || 0} ${Number(first.reps) || 0} ${Number(first.sets) || 0}`
+                : "/edit 스쿼트 105 5 5";
+            await send(`최근 기록을 바꾸려면 아래 형식을 복사해 수정하세요.\n\`${example}\``);
+            return json({ ok: true });
+        }
+        if (text === "기록" || text === "유산소 기록") {
+            if (goalMode === "fat_loss") {
+                await send("기록 예시:\n- `러닝머신 30 1 1`\n- `빠르게걷기 25 1 1`\n- `사이클 35 1 1`");
+            } else {
+                await send("기록 예시:\n- `스쿼트 100 5 5`\n- `벤치 60x10x5 @9`\n- `데드 120 5 5`");
+            }
+            return json({ ok: true });
+        }
+
         // Help: /help, /start
         if (text === "/help" || text === "/start" || text === "/commands" || text === "help" || text === "도움말" || text === "?") {
-            await sendMessage(chatId, helpText(), true);
+            await send(helpText(), true);
             return json({ ok: true });
         }
 
@@ -242,12 +303,14 @@ export async function POST(req: NextRequest) {
 
             const report = [
                 "*Iron Quant Debug*",
+                `- build: \`${BOT_BUILD}\``,
                 `- Supabase ref: \`${ref}\``,
                 `- user: \`${user?.id ?? "none"}\` / \`${user?.full_name ?? "none"}\``,
                 `- workouts(me): \`${workoutsCount ?? 0}\``,
+                "- mode parser: `v2`",
             ].join("\n");
 
-            await sendMessage(chatId, report, true);
+            await send(report, true);
             return json({ ok: true });
         }
 
@@ -255,10 +318,10 @@ export async function POST(req: NextRequest) {
         if (text === "/recompute") {
             try {
                 await recomputeBig3Prs(supabaseAdmin, MY_ID);
-                await sendMessage(chatId, "✅ 1RM(3대) 재계산 완료", true);
+                await send("✅ 1RM(3대) 재계산 완료", true);
             } catch (e) {
                 console.error("PR recompute failed:", e);
-                await sendMessage(chatId, "❌ 재계산 실패 (로그 확인)");
+                await send("❌ 재계산 실패 (로그 확인)");
             }
             return json({ ok: true });
         }
@@ -274,14 +337,14 @@ export async function POST(req: NextRequest) {
                     .eq("id", MY_ID)
                     .single();
                 if (error) {
-                    await sendMessage(chatId, `❌ 조회 실패: ${error.message}`);
+                    await send(`❌ 조회 실패: ${error.message}`);
                     return json({ ok: true });
                 }
                 const enabled = Boolean(user?.telegram_remind_enabled);
                 const time = user?.telegram_remind_time ?? "21:00";
                 const tz = user?.telegram_timezone ?? "Asia/Seoul";
                 const linked = user?.telegram_chat_id ? "linked" : "not linked";
-                await sendMessage(chatId, `*리마인더 상태*\n- chat: \`${linked}\`\n- enabled: \`${enabled}\`\n- time: \`${time}\`\n- tz: \`${tz}\`\n\n설정: \`/remind on\`, \`/remind off\`, \`/remind time 21:00\`, \`/remind tz Asia/Seoul\``, true);
+                await send(`*리마인더 상태*\n- chat: \`${linked}\`\n- enabled: \`${enabled}\`\n- time: \`${time}\`\n- tz: \`${tz}\`\n\n설정: \`/remind on\`, \`/remind off\`, \`/remind time 21:00\`, \`/remind tz Asia/Seoul\``, true);
                 return json({ ok: true });
             }
 
@@ -294,7 +357,7 @@ export async function POST(req: NextRequest) {
                 const enabled = Boolean(user?.telegram_remind_enabled);
                 const time = user?.telegram_remind_time ?? "21:00";
                 const tz = user?.telegram_timezone ?? "Asia/Seoul";
-                await sendMessage(chatId, `✅ 리마인더 테스트\n- enabled: \`${enabled}\`\n- time: \`${time}\`\n- tz: \`${tz}\`\n\n오늘 기록이 없으면 설정된 시간에 알림이 갑니다.`, true);
+                await send(`✅ 리마인더 테스트\n- enabled: \`${enabled}\`\n- time: \`${time}\`\n- tz: \`${tz}\`\n\n오늘 기록이 없으면 설정된 시간에 알림이 갑니다.`, true);
                 return json({ ok: true });
             }
 
@@ -303,9 +366,9 @@ export async function POST(req: NextRequest) {
                     .from("users")
                     .upsert({ id: MY_ID, telegram_remind_enabled: arg === "on" }, { onConflict: "id" });
                 if (error) {
-                    await sendMessage(chatId, `❌ 설정 실패: ${error.message}\n(먼저 supabase/telegram_reminder_patch.sql 실행 필요)`);
+                    await send(`❌ 설정 실패: ${error.message}\n(먼저 supabase/telegram_reminder_patch.sql 실행 필요)`);
                 } else {
-                    await sendMessage(chatId, `✅ 리마인더: ${arg === "on" ? "ON" : "OFF"}`, true);
+                    await send(`✅ 리마인더: ${arg === "on" ? "ON" : "OFF"}`, true);
                 }
                 return json({ ok: true });
             }
@@ -313,21 +376,21 @@ export async function POST(req: NextRequest) {
             if (arg.startsWith("time ")) {
                 const time = arg.replace(/^time\s+/, "").trim();
                 if (!/^\d{2}:\d{2}$/.test(time)) {
-                    await sendMessage(chatId, "사용법: `/remind time 21:00`");
+                    await send("사용법: `/remind time 21:00`");
                     return json({ ok: true });
                 }
                 const [hh, mm] = time.split(":").map((v) => Number(v));
                 if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) {
-                    await sendMessage(chatId, "시간 형식이 올바르지 않습니다. 예: `21:00`");
+                    await send("시간 형식이 올바르지 않습니다. 예: `21:00`");
                     return json({ ok: true });
                 }
                 const { error } = await supabaseAdmin
                     .from("users")
                     .upsert({ id: MY_ID, telegram_remind_time: time }, { onConflict: "id" });
                 if (error) {
-                    await sendMessage(chatId, `❌ 설정 실패: ${error.message}\n(먼저 supabase/telegram_reminder_patch.sql 실행 필요)`);
+                    await send(`❌ 설정 실패: ${error.message}\n(먼저 supabase/telegram_reminder_patch.sql 실행 필요)`);
                 } else {
-                    await sendMessage(chatId, `✅ 리마인더 시간: ${time}`, true);
+                    await send(`✅ 리마인더 시간: ${time}`, true);
                 }
                 return json({ ok: true });
             }
@@ -335,7 +398,7 @@ export async function POST(req: NextRequest) {
             if (arg.startsWith("tz ")) {
                 const tz = arg.replace(/^tz\s+/, "").trim();
                 if (!tz) {
-                    await sendMessage(chatId, "사용법: `/remind tz Asia/Seoul`");
+                    await send("사용법: `/remind tz Asia/Seoul`");
                     return json({ ok: true });
                 }
                 // We can't reliably validate IANA tz without extra deps; store as-is.
@@ -343,14 +406,53 @@ export async function POST(req: NextRequest) {
                     .from("users")
                     .upsert({ id: MY_ID, telegram_timezone: tz }, { onConflict: "id" });
                 if (error) {
-                    await sendMessage(chatId, `❌ 설정 실패: ${error.message}\n(먼저 supabase/telegram_reminder_patch.sql 실행 필요)`);
+                    await send(`❌ 설정 실패: ${error.message}\n(먼저 supabase/telegram_reminder_patch.sql 실행 필요)`);
                 } else {
-                    await sendMessage(chatId, `✅ 타임존: ${tz}`, true);
+                    await send(`✅ 타임존: ${tz}`, true);
                 }
                 return json({ ok: true });
             }
 
-            await sendMessage(chatId, "사용법: `/remind status|on|off|time 21:00|tz Asia/Seoul`");
+            await send("사용법: `/remind status|on|off|time 21:00|tz Asia/Seoul`");
+            return json({ ok: true });
+        }
+
+        // 0. Command: /mode fat|muscle (robust parser: /mode, mode, 모드)
+        const modeTokens = text.replace(/\s+/g, " ").trim().split(" ");
+        const modeHead = (modeTokens[0] ?? "").toLowerCase();
+        const isModeCommand = modeHead === "/mode" || modeHead === "mode" || modeHead === "모드";
+        if (isModeCommand) {
+            const argRaw = modeTokens.slice(1).join(" ").trim().toLowerCase().replace(/^[:=]\s*/, "");
+            const arg = argRaw.replace(/\s+/g, "");
+            if (!arg) {
+                await send(
+                    [
+                        `현재 모드: *${goalMode === "fat_loss" ? "감량" : "근육"}*`,
+                        "변경 명령:",
+                        "- `/mode fat` (감량)",
+                        "- `/mode muscle` (근육)",
+                        "- `mode fat` (슬래시 없이도 가능)",
+                    ].join("\n"),
+                );
+                return json({ ok: true });
+            }
+
+            let next: GoalMode | null = null;
+            if (["fat", "fatloss", "fat_loss", "감량", "다이어트"].includes(arg)) next = "fat_loss";
+            if (["muscle", "musclegain", "muscle_gain", "근육", "벌크"].includes(arg)) next = "muscle_gain";
+            if (!next) {
+                await send("사용법: `/mode fat` 또는 `/mode muscle` (`mode fat`도 가능)");
+                return json({ ok: true });
+            }
+
+            const { error } = await supabaseAdmin
+                .from("users")
+                .upsert({ id: MY_ID, goal_mode: next }, { onConflict: "id" });
+            if (error) {
+                await send(`❌ 모드 변경 실패: ${error.message}`);
+            } else {
+                await sendMessage(chatId, `✅ 모드 변경: *${next === "fat_loss" ? "감량 모드" : "근육 모드"}*`, true, next);
+            }
             return json({ ok: true });
         }
 
@@ -358,7 +460,7 @@ export async function POST(req: NextRequest) {
         if (text.startsWith("/name ")) {
             const newName = text.replace(/^\/name\s+/, "").trim();
             if (!newName) {
-                await sendMessage(chatId, "사용법: `/name 홍길동`");
+                await send("사용법: `/name 홍길동`");
                 return json({ ok: true });
             }
             const { error } = await supabaseAdmin
@@ -366,9 +468,9 @@ export async function POST(req: NextRequest) {
                 .upsert({ id: MY_ID, full_name: newName }, { onConflict: "id" });
             if (error) {
                 console.error("Name update error:", error);
-                await sendMessage(chatId, `❌ 이름 변경 실패: ${error.message}`);
+                await send(`❌ 이름 변경 실패: ${error.message}`);
             } else {
-                await sendMessage(chatId, `✅ 이름 변경: ${newName}`, true);
+                await send(`✅ 이름 변경: ${newName}`, true);
             }
             return json({ ok: true });
         }
@@ -378,14 +480,14 @@ export async function POST(req: NextRequest) {
         if (text.startsWith("/set ")) {
             const parts = text.replace(/^\/set\s+/, "").trim().split(/\s+/);
             if (parts.length < 2) {
-                await sendMessage(chatId, "사용법: `/set weight 75` 또는 `/set muscle 35`");
+                await send("사용법: `/set weight 75` 또는 `/set muscle 35`");
                 return json({ ok: true });
             }
             const key = parts[0].toLowerCase();
             const val = parseFloat(parts[1]);
 
             if (isNaN(val)) {
-                await sendMessage(chatId, "❌ 숫자를 입력해주세요.");
+                await send("❌ 숫자를 입력해주세요.");
                 return json({ ok: true });
             }
 
@@ -405,16 +507,16 @@ export async function POST(req: NextRequest) {
                 updatePayload.fat_percentage = storedValue;
                 label = "체지방률";
             } else {
-                await sendMessage(chatId, "지원하는 항목: weight, muscle, fat");
+                await send("지원하는 항목: weight, muscle, fat");
                 return json({ ok: true });
             }
 
             const { error } = await supabaseAdmin.from("users").upsert(updatePayload, { onConflict: "id" });
 
             if (error) {
-                await sendMessage(chatId, `❌ 변경 실패: ${error.message}`);
+                await send(`❌ 변경 실패: ${error.message}`);
             } else {
-                await sendMessage(chatId, `✅ ${label} 업데이트: ${storedValue}`, true);
+                await send(`✅ ${label} 업데이트: ${storedValue}`, true);
             }
             return json({ ok: true });
         }
@@ -437,32 +539,61 @@ export async function POST(req: NextRequest) {
             if (workoutsError) console.error("Supabase workouts select error:", workoutsError);
 
             if (!user) {
-                await sendMessage(chatId, "❌ 사용자 정보가 없습니다. `users` 테이블에 id=me row가 있는지 확인하세요.");
+                await send("❌ 사용자 정보가 없습니다. `users` 테이블에 id=me row가 있는지 확인하세요.");
                 return json({ ok: true });
             }
 
             const workouts = (workoutRows ?? []).map(mapWorkoutRow);
-
-            const squat = typeof user.estimated_1rm_squat === "string" ? Number(user.estimated_1rm_squat) : (user.estimated_1rm_squat || 0);
-            const bench = typeof user.estimated_1rm_bench === "string" ? Number(user.estimated_1rm_bench) : (user.estimated_1rm_bench || 0);
-            const dead = typeof user.estimated_1rm_dead === "string" ? Number(user.estimated_1rm_dead) : (user.estimated_1rm_dead || 0);
-            const totalAsset = (squat || 0) + (bench || 0) + (dead || 0);
-            const advice = analyzePortfolio(workouts);
+            const advice = analyzeAdviceForGoal(goalMode, workouts);
             const mainAdvice = advice[0]?.message || "균형이 잡혀있습니다.";
+            const report = (() => {
+                if (goalMode === "fat_loss") {
+                    const weekMs = 7 * 24 * 60 * 60 * 1000;
+                    const week = workouts.filter((w) => {
+                        const t = Date.parse(w.workout_date);
+                        return Number.isFinite(t) && Date.now() - t <= weekMs;
+                    });
+                    const weekMinutes = week.reduce((acc, w) => acc + (w.duration_minutes || 0), 0);
+                    const weekCalories = week.reduce((acc, w) => {
+                        const rpe = Number.isFinite(w.average_rpe) ? w.average_rpe : 6;
+                        const mets = rpe >= 8 ? 6 : rpe >= 6 ? 5 : rpe >= 4 ? 4 : 3;
+                        return acc + Math.round(mets * (Number(user.weight) || 75) * ((w.duration_minutes || 0) / 60));
+                    }, 0);
+                    const progress = Math.min(100, Math.round((weekMinutes / 150) * 100));
+                    return [
+                        "📊 *Iron Quant 감량 리포트*",
+                        "",
+                        `🎯 모드: *감량*`,
+                        `⚖ 체중: *${user.weight ?? 0}kg*`,
+                        `⏱ 최근 7일 유산소: *${weekMinutes}분* (목표 150분, ${progress}%)`,
+                        `🔥 최근 7일 추정 소모: *${Math.round(weekCalories).toLocaleString()} kcal*`,
+                        "",
+                        `📢 오늘 액션`,
+                        `"${mainAdvice}"`,
+                        "",
+                        `최근 운동: ${workouts[0] ? workouts[0].workout_date : "없음"}`,
+                    ].join("\\n");
+                }
 
-            const report = `
-📊 *Iron Quant 자산 리포트*
+                const squat = typeof user.estimated_1rm_squat === "string" ? Number(user.estimated_1rm_squat) : (user.estimated_1rm_squat || 0);
+                const bench = typeof user.estimated_1rm_bench === "string" ? Number(user.estimated_1rm_bench) : (user.estimated_1rm_bench || 0);
+                const dead = typeof user.estimated_1rm_dead === "string" ? Number(user.estimated_1rm_dead) : (user.estimated_1rm_dead || 0);
+                const totalAsset = (squat || 0) + (bench || 0) + (dead || 0);
+                return [
+                    "📊 *Iron Quant 자산 리포트*",
+                    "",
+                    "🎯 모드: *근육*",
+                    `💰 3대 중량 (Total 1RM): *${totalAsset}kg*`,
+                    `⚖ 현재 체중: *${user.weight ?? 0}kg*`,
+                    "",
+                    "📢 투자 의견 (Iron Analyst)",
+                    `"${mainAdvice}"`,
+                    "",
+                    `최근 운동: ${workouts[0] ? workouts[0].workout_date : "없음"}`,
+                ].join("\\n");
+            })();
 
-💰 *3대 중량 (Total 1RM)*: ${totalAsset}kg
-⚖ *현재 체중*: ${user.weight ?? 0}kg
-
-📢 *투자 의견 (Iron Analyst)*
-"${mainAdvice}"
-
-최근 운동: ${workouts[0] ? workouts[0].workout_date : '없음'}
-            `.trim();
-
-            await sendMessage(chatId, report, true);
+            await send(report, true);
             return json({ ok: true });
         }
 
@@ -476,16 +607,17 @@ export async function POST(req: NextRequest) {
                 .limit(10);
             if (workoutsError) console.error("Supabase workouts select error:", workoutsError);
             const workouts = (workoutRows ?? []).map(mapWorkoutRow);
-            const advice = analyzePortfolio(workouts);
+            const advice = analyzeAdviceForGoal(goalMode, workouts);
 
             if (advice.length === 0) {
-                await sendMessage(chatId, "데이터가 부족하여 추천할 수 없습니다. 운동을 기록해주세요!", true);
+                await send("데이터가 부족하여 추천할 수 없습니다. 운동을 기록해주세요!", true);
             } else {
                 const topPick = advice.find(a => a.type === 'Buy');
                 if (topPick) {
-                    await sendMessage(chatId, `🚀 *강력 매수 추천*\n\n${topPick.message}\n추천 종목: ${topPick.recommendedWorkout}`, true);
+                    const title = goalMode === "fat_loss" ? "🔥 *오늘 감량 추천*" : "🚀 *강력 매수 추천*";
+                    await send(`${title}\n\n${topPick.message}\n추천: ${topPick.recommendedWorkout ?? "자유 운동"}`, true);
                 } else {
-                    await sendMessage(chatId, `✅ *Hold 의견*\n\n${advice[0].message}`, true);
+                    await send(`✅ *Hold 의견*\n\n${advice[0].message}`, true);
                 }
             }
             return json({ ok: true });
@@ -500,7 +632,7 @@ export async function POST(req: NextRequest) {
                 .single();
             const timeZone = (user?.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
             const report = await buildWeeklyTelegramReport(supabaseAdmin, MY_ID, timeZone);
-            await sendMessage(chatId, report.text, true);
+            await send(report.text, true);
             return json({ ok: true });
         }
 
@@ -513,7 +645,7 @@ export async function POST(req: NextRequest) {
                 .single();
             const timeZone = (user?.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
             const report = await buildMonthlyTelegramReport(supabaseAdmin, MY_ID, timeZone);
-            await sendMessage(chatId, report.text, true);
+            await send(report.text, true);
             return json({ ok: true });
         }
 
@@ -526,12 +658,12 @@ export async function POST(req: NextRequest) {
                 .order("created_at", { ascending: false })
                 .limit(1);
             if (error) {
-                await sendMessage(chatId, `❌ 조회 실패: ${error.message}`);
+                await send(`❌ 조회 실패: ${error.message}`);
                 return json({ ok: true });
             }
             const w = rows?.[0];
             if (!w) {
-                await sendMessage(chatId, "최근 운동이 없습니다.");
+                await send("최근 운동이 없습니다.");
                 return json({ ok: true });
             }
             const logs = Array.isArray(w.logs) ? w.logs : [];
@@ -549,7 +681,7 @@ export async function POST(req: NextRequest) {
                 `- id: \`${w.id}\``,
                 hint,
             ].join("\n");
-            await sendMessage(chatId, msg, true);
+            await send(msg, true);
             return json({ ok: true });
         }
 
@@ -563,17 +695,17 @@ export async function POST(req: NextRequest) {
                 .order("created_at", { ascending: false })
                 .limit(1);
             if (error) {
-                await sendMessage(chatId, `❌ 조회 실패: ${error.message}`);
+                await send(`❌ 조회 실패: ${error.message}`);
                 return json({ ok: true });
             }
             const w = rows?.[0];
             if (!w) {
-                await sendMessage(chatId, "되돌릴 기록이 없습니다.");
+                await send("되돌릴 기록이 없습니다.");
                 return json({ ok: true });
             }
             const mins = typeof w.created_at === "string" ? minutesAgo(w.created_at) : null;
             if (!force && mins !== null && mins > 30) {
-                await sendMessage(chatId, "최근 기록이 30분이 지나서 /undo를 막았습니다. 정말 삭제하려면 `/undo!` 를 입력하세요.");
+                await send("최근 기록이 30분이 지나서 /undo를 막았습니다. 정말 삭제하려면 `/undo!` 를 입력하세요.");
                 return json({ ok: true });
             }
 
@@ -583,7 +715,7 @@ export async function POST(req: NextRequest) {
                 .eq("id", w.id)
                 .eq("user_id", MY_ID);
             if (delErr) {
-                await sendMessage(chatId, `❌ 삭제 실패: ${delErr.message}`);
+                await send(`❌ 삭제 실패: ${delErr.message}`);
                 return json({ ok: true });
             }
 
@@ -593,7 +725,7 @@ export async function POST(req: NextRequest) {
                 console.error("PR recompute failed:", e);
             }
 
-            await sendMessage(chatId, `✅ 되돌림 완료: ${w.title ?? "운동"} (${w.workout_date ?? ""})`, true);
+            await send(`✅ 되돌림 완료: ${w.title ?? "운동"} (${w.workout_date ?? ""})`, true);
             return json({ ok: true });
         }
 
@@ -601,7 +733,7 @@ export async function POST(req: NextRequest) {
         if (text.startsWith("/edit ")) {
             const newText = text.replace(/^\/edit\s+/, "").trim();
             if (!newText) {
-                await sendMessage(chatId, "사용법: `/edit 스쿼트 105 5 5`");
+                await send("사용법: `/edit 스쿼트 105 5 5`");
                 return json({ ok: true });
             }
 
@@ -612,17 +744,17 @@ export async function POST(req: NextRequest) {
                 .order("created_at", { ascending: false })
                 .limit(1);
             if (error) {
-                await sendMessage(chatId, `❌ 조회 실패: ${error.message}`);
+                await send(`❌ 조회 실패: ${error.message}`);
                 return json({ ok: true });
             }
             const last = rows?.[0];
             if (!last) {
-                await sendMessage(chatId, "수정할 최근 기록이 없습니다.");
+                await send("수정할 최근 기록이 없습니다.");
                 return json({ ok: true });
             }
             const mins = typeof last.created_at === "string" ? minutesAgo(last.created_at) : null;
             if (mins !== null && mins > 30) {
-                await sendMessage(chatId, "최근 기록이 30분이 지나서 /edit을 막았습니다. 웹에서 수정/추가로 기록하세요.");
+                await send("최근 기록이 30분이 지나서 /edit을 막았습니다. 웹에서 수정/추가로 기록하세요.");
                 return json({ ok: true });
             }
 
@@ -640,7 +772,7 @@ export async function POST(req: NextRequest) {
 
             const parsed = parseWorkoutText(newText, userWeight);
             if (!parsed || parsed.weight <= 0) {
-                await sendMessage(chatId, "❌ 파싱 실패. 예: `스쿼트 100 5 5` 형태로 입력하세요.");
+                await send("❌ 파싱 실패. 예: `스쿼트 100 5 5` 형태로 입력하세요.");
                 return json({ ok: true });
             }
 
@@ -661,7 +793,7 @@ export async function POST(req: NextRequest) {
                 .eq("id", last.id)
                 .eq("user_id", MY_ID);
             if (upErr) {
-                await sendMessage(chatId, `❌ 수정 실패: ${upErr.message}`);
+                await send(`❌ 수정 실패: ${upErr.message}`);
                 return json({ ok: true });
             }
 
@@ -671,7 +803,7 @@ export async function POST(req: NextRequest) {
                 console.error("PR update failed:", e);
             }
 
-            await sendMessage(chatId, `✅ 수정 완료: ${patch.title}`, true);
+            await send(`✅ 수정 완료: ${patch.title}`, true);
             return json({ ok: true });
         }
 
@@ -683,7 +815,7 @@ export async function POST(req: NextRequest) {
             const [{ data: user, error: userError }, { data: workouts, error: wError }] = await Promise.all([
                 supabaseAdmin
                     .from("users")
-                    .select("id, full_name, weight, muscle_mass, fat_percentage, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, level, xp, current_streak")
+                    .select("id, full_name, goal_mode, weight, muscle_mass, fat_percentage, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, level, xp, current_streak")
                     .eq("id", MY_ID)
                     .single(),
                 supabaseAdmin
@@ -694,11 +826,11 @@ export async function POST(req: NextRequest) {
             ]);
 
             if (userError) {
-                await sendMessage(chatId, `❌ 내보내기 실패: ${userError.message}`);
+                await send(`❌ 내보내기 실패: ${userError.message}`);
                 return json({ ok: true });
             }
             if (wError) {
-                await sendMessage(chatId, `❌ 내보내기 실패: ${wError.message}`);
+                await send(`❌ 내보내기 실패: ${wError.message}`);
                 return json({ ok: true });
             }
 
@@ -706,7 +838,7 @@ export async function POST(req: NextRequest) {
             if (fmt === "json") {
                 const payload = JSON.stringify({ exported_at: exportedAt, user, workouts: workouts ?? [] }, null, 2);
                 await sendDocument(chatId, "iron-quant-export.json", "application/json", payload);
-                await sendMessage(chatId, "✅ JSON 내보내기 완료", true);
+                await send("✅ JSON 내보내기 완료", true);
                 return json({ ok: true });
             }
 
@@ -732,7 +864,7 @@ export async function POST(req: NextRequest) {
                 ].join(","));
             }
             await sendDocument(chatId, "iron-quant-workouts.csv", "text/csv", lines.join("\n"));
-            await sendMessage(chatId, "✅ CSV 내보내기 완료", true);
+            await send("✅ CSV 내보내기 완료", true);
             return json({ ok: true });
         }
 
@@ -774,8 +906,22 @@ export async function POST(req: NextRequest) {
         const parsedLogs = parsedLines.ok ? parsedLines.logs : [];
 
         if (!parsedLines.ok) {
-            await sendMessage(
-                chatId,
+            const examples = goalMode === "fat_loss"
+                ? [
+                    "- `러닝머신 30 1 1`",
+                    "- `빠르게걷기 25 1 1`",
+                    "- 여러 종목은 줄바꿈으로 입력:",
+                    "  `러닝머신 20 1 1`",
+                    "  `사이클 20 1 1`",
+                ]
+                : [
+                    "- `스쿼트 100 5 5`",
+                    "- `벤치 60x10x5 @9`",
+                    "- 여러 종목은 줄바꿈으로 입력:",
+                    "  `스쿼트 100 5 5`",
+                    "  `벤치 60 10 5`",
+                ];
+            await send(
                 [
                     "❌ 일부 줄을 해석하지 못했습니다.",
                     "",
@@ -783,11 +929,7 @@ export async function POST(req: NextRequest) {
                     parsedLines.bad.length > 5 ? `- ... +${parsedLines.bad.length - 5}` : "",
                     "",
                     "예시:",
-                    "- `스쿼트 100 5 5`",
-                    "- `벤치 60x10x5 @9`",
-                    "- 여러 종목은 줄바꿈으로 입력:",
-                    "  `스쿼트 100 5 5`",
-                    "  `벤치 60 10 5`",
+                    ...examples,
                 ].filter(Boolean).join("\n"),
             );
             return json({ ok: true });
@@ -839,7 +981,7 @@ export async function POST(req: NextRequest) {
 
             if (error) {
                 console.error("DB Insert Error", error);
-                await sendMessage(chatId, `❌ 기록 실패: ${error.message}\n\n(대부분 users에 id=me가 없거나, 권한/RLS 문제입니다)`);
+                await send(`❌ 기록 실패: ${error.message}\n\n(대부분 users에 id=me가 없거나, 권한/RLS 문제입니다)`);
             } else {
                 try {
                     await applyBig3Prs(supabaseAdmin, MY_ID, estimateBig3FromLogs(logs));
@@ -897,12 +1039,25 @@ export async function POST(req: NextRequest) {
                     console.error("Ghost Replay Error", e);
                 }
 
-                await sendMessage(chatId, msg, true);
+                await send(msg, true);
             }
         } else {
             // Echo or Help
-            if (text.startsWith('/')) {
-                await sendMessage(chatId, helpText(), true);
+            if (isModeCommand) {
+                await send("사용법: `/mode fat` 또는 `/mode muscle` (`mode fat`도 가능)");
+            } else if (text.startsWith('/')) {
+                await send(helpText(), true);
+            } else {
+                await send(
+                    [
+                        "입력을 해석하지 못했습니다.",
+                        "",
+                        "예시:",
+                        "- `러닝머신 30 1 1`",
+                        "- `스쿼트 100 5 5`",
+                        "- `mode fat`",
+                    ].join("\n"),
+                );
             }
         }
 

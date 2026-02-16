@@ -1,11 +1,12 @@
 "use client";
 
-import { User as UserIcon, Settings, Trophy, Activity, Lock } from "lucide-react";
+import { User as UserIcon, Settings, Trophy, Activity, Lock, RefreshCcw } from "lucide-react";
 import { useData } from "@/lib/data/context";
 import { useUI } from "@/lib/ui/context";
+import { goalModeLabel } from "@/lib/goal_mode";
 
 export function ProfileView() {
-    const { user, isLoading, error, offlineQueueSize } = useData();
+    const { user, isLoading, error, offlineQueueSize, syncState, syncMessage, retrySync, resolveConflict } = useData();
     const { openProfileEditor, openUnlock } = useUI();
 
     if (isLoading || !user) {
@@ -55,9 +56,44 @@ export function ProfileView() {
 
             {offlineQueueSize > 0 ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-100">
-                    오프라인 임시 저장 {offlineQueueSize}건이 대기 중입니다. 온라인이 되면 자동 반영됩니다.
+                    오프라인 임시 저장 {offlineQueueSize}건이 대기 중입니다.
                 </div>
             ) : null}
+
+            <div className="rounded-2xl border border-toss-grey-100 bg-white p-3 text-sm dark:border-gray-700 dark:bg-gray-800">
+                <div className="flex items-center justify-between">
+                    <span className="font-bold text-toss-grey-700 dark:text-gray-200">동기화 상태</span>
+                    <span className="rounded-full bg-toss-grey-100 px-2 py-0.5 text-xs font-bold text-toss-grey-700 dark:bg-gray-700 dark:text-gray-200">
+                        {syncState === "saved" ? "저장됨" : syncState === "syncing" ? "동기화중" : syncState === "done" ? "완료" : syncState === "conflict" ? "충돌" : syncState === "error" ? "실패" : "대기"}
+                    </span>
+                </div>
+                <div className="mt-1 text-xs text-toss-grey-500 dark:text-gray-400">{syncMessage}</div>
+                {(syncState === "error" || syncState === "saved") ? (
+                    <button
+                        onClick={() => { void retrySync(); }}
+                        className="mt-2 inline-flex items-center gap-1 rounded-lg border border-toss-grey-200 px-2 py-1 text-xs font-bold text-toss-grey-700 dark:border-gray-600 dark:text-gray-200"
+                    >
+                        <RefreshCcw size={12} />
+                        다시 동기화
+                    </button>
+                ) : null}
+                {syncState === "conflict" ? (
+                    <div className="mt-2 flex gap-2">
+                        <button
+                            onClick={() => { void resolveConflict("keep_local"); }}
+                            className="rounded-lg border border-toss-grey-200 px-2 py-1 text-xs font-bold text-toss-grey-700 dark:border-gray-600 dark:text-gray-200"
+                        >
+                            내 기록 유지
+                        </button>
+                        <button
+                            onClick={() => { void resolveConflict("use_server"); }}
+                            className="rounded-lg border border-red-200 px-2 py-1 text-xs font-bold text-red-700 dark:border-red-800 dark:text-red-300"
+                        >
+                            서버 기록 사용
+                        </button>
+                    </div>
+                ) : null}
+            </div>
 
             {/* Profile Header */}
             <div className="flex flex-col items-center space-y-4">
@@ -66,7 +102,7 @@ export function ProfileView() {
                 </div>
                 <div className="text-center">
                     <h2 className="text-xl font-bold text-toss-grey-900 dark:text-white">{user.full_name}</h2>
-                    <div className="text-toss-blue font-medium">Level {user.level}</div>
+                    <div className="text-toss-blue font-medium">Level {user.level} · {goalModeLabel(user.goal_mode)}</div>
                 </div>
             </div>
 
@@ -109,7 +145,9 @@ export function ProfileView() {
 
             {/* 1RM Box */}
             <div className="bg-toss-grey-50 dark:bg-gray-800/50 p-6 rounded-3xl space-y-4">
-                <h3 className="font-bold text-toss-grey-700 dark:text-gray-300">나의 1RM 추정치</h3>
+                <h3 className="font-bold text-toss-grey-700 dark:text-gray-300">
+                    {user.goal_mode === "fat_loss" ? "근력 지표 (선택)" : "나의 1RM 추정치"}
+                </h3>
                 <div className="space-y-3">
                     <div className="flex justify-between items-center">
                         <span className="text-toss-grey-500">스쿼트</span>

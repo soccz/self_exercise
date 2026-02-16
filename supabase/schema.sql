@@ -5,6 +5,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE IF NOT EXISTS public.users (
     id TEXT PRIMARY KEY, -- 'me' or arbitrary string
     full_name TEXT,
+    goal_mode TEXT DEFAULT 'fat_loss' CHECK (goal_mode IN ('fat_loss', 'muscle_gain')),
     
     -- Body Stats (Assets)
     weight NUMERIC(5,2),         

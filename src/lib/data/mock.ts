@@ -3,6 +3,7 @@ import { DataProvider, User, UserPatch, Workout, WorkoutDraft } from "./types";
 const MOCK_USER: User = {
     id: 'me',
     full_name: 'Iron Quant',
+    goal_mode: "fat_loss",
     weight: 0,
     muscle_mass: 0,
     fat_percentage: 0,
@@ -32,7 +33,7 @@ export class MockDataProvider implements DataProvider {
 
     async getTodayMission(_userId: string): Promise<string> {
         void _userId;
-        return "스쿼트 5x5 증량 도전";
+        return "빠르게 걷기 20분";
     }
 
     async saveWorkout(userId: string, workout: WorkoutDraft): Promise<void> {

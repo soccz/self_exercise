@@ -42,7 +42,7 @@ export async function GET(req: Request) {
     supabase
       .from("users")
       .select(
-        "id, full_name, weight, muscle_mass, fat_percentage, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, level, xp, current_streak",
+        "id, full_name, goal_mode, weight, muscle_mass, fat_percentage, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, level, xp, current_streak",
       )
       .eq("id", SINGLE_PLAYER_ID)
       .single(),
@@ -116,4 +116,3 @@ export async function GET(req: Request) {
   });
   return res;
 }
-

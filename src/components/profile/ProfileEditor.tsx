@@ -5,6 +5,7 @@ import { X, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useData } from "@/lib/data/context";
 import { useUI } from "@/lib/ui/context";
+import type { GoalMode } from "@/lib/data/types";
 
 interface ProfileEditorProps {
   isOpen: boolean;
@@ -36,6 +37,7 @@ export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
 
   const [form, setForm] = useState({
     fullName: "",
+    goalMode: "fat_loss" as GoalMode,
     weight: "",
     muscleMass: "",
     fatPercentage: "",
@@ -49,6 +51,7 @@ export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm({
       fullName: user.full_name ?? "",
+      goalMode: user.goal_mode ?? "fat_loss",
       weight: String(user.weight ?? ""),
       muscleMass: String(user.muscle_mass ?? ""),
       fatPercentage: String(user.fat_percentage ?? ""),
@@ -93,6 +96,7 @@ export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
 
     const res = await saveUser({
       full_name: form.fullName.trim(),
+      goal_mode: form.goalMode,
       weight,
       muscle_mass,
       fat_percentage,
@@ -166,6 +170,34 @@ export function ProfileEditor({ isOpen, onClose }: ProfileEditorProps) {
                   onChange={(e) => setForm((prev) => ({ ...prev, fullName: e.target.value }))}
                   className="w-full text-lg font-bold border-b-2 border-gray-200 focus:border-toss-blue outline-none py-2 bg-transparent dark:text-white dark:border-gray-700"
                 />
+              </div>
+
+              <div className="rounded-2xl border border-toss-grey-100 bg-white p-4 dark:border-gray-700 dark:bg-gray-900/30">
+                <div className="text-sm font-bold text-toss-grey-700 dark:text-gray-200">목표 모드</div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, goalMode: "fat_loss" }))}
+                    className={`rounded-xl border px-3 py-2 text-left text-sm transition ${form.goalMode === "fat_loss"
+                      ? "border-toss-blue bg-toss-blue/10 text-toss-blue"
+                      : "border-gray-200 bg-white text-toss-grey-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+                      }`}
+                  >
+                    <div className="font-bold">감량</div>
+                    <div className="text-[11px] opacity-80">유산소/칼로리 중심</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, goalMode: "muscle_gain" }))}
+                    className={`rounded-xl border px-3 py-2 text-left text-sm transition ${form.goalMode === "muscle_gain"
+                      ? "border-toss-blue bg-toss-blue/10 text-toss-blue"
+                      : "border-gray-200 bg-white text-toss-grey-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+                      }`}
+                  >
+                    <div className="font-bold">근육</div>
+                    <div className="text-[11px] opacity-80">중량/1RM 중심</div>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

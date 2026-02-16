@@ -4,6 +4,7 @@ import { Download, Trash2 } from "lucide-react";
 import { useData } from "@/lib/data/context";
 import { useUI } from "@/lib/ui/context";
 import { useState } from "react";
+import { calculateCalories } from "@/lib/quant/engine";
 
 export function AnalyticsView() {
   const { user, recentWorkouts, deleteWorkout, isLoading, error } = useData();
@@ -61,6 +62,7 @@ export function AnalyticsView() {
   }
 
   const recentCount = recentWorkouts.length;
+  const isFatLoss = user.goal_mode === "fat_loss";
   const avgRpe = recentCount
     ? recentWorkouts.reduce((acc, workout) => acc + workout.average_rpe, 0) / recentCount
     : 0;
@@ -76,7 +78,12 @@ export function AnalyticsView() {
       return Number.isFinite(t) && now - t <= sevenDays;
     });
     const volume = workouts.reduce((acc, w) => acc + (w.total_volume || 0), 0);
-    return { count: workouts.length, volume };
+    const calories = workouts.reduce(
+      (acc, w) => acc + calculateCalories(user.weight || 75, w.duration_minutes || 0, w.average_rpe || 6),
+      0,
+    );
+    const minutes = workouts.reduce((acc, w) => acc + (w.duration_minutes || 0), 0);
+    return { count: workouts.length, volume, calories, minutes };
   })();
 
   return (
@@ -106,9 +113,9 @@ export function AnalyticsView() {
           </div>
         </div>
         <div className="rounded-2xl border border-toss-grey-100 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <div className="text-xs text-toss-grey-500">평균 RPE</div>
+          <div className="text-xs text-toss-grey-500">{isFatLoss ? "최근 7일 칼로리" : "평균 RPE"}</div>
           <div className="mt-1 text-2xl font-bold text-toss-grey-900 dark:text-white">
-            {avgRpe.toFixed(1)}
+            {isFatLoss ? `${Math.round(last7.calories).toLocaleString()}kcal` : avgRpe.toFixed(1)}
           </div>
         </div>
       </div>
@@ -121,9 +128,9 @@ export function AnalyticsView() {
           </div>
         </div>
         <div className="rounded-2xl border border-toss-grey-100 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <div className="text-xs text-toss-grey-500">최근 7일 총 볼륨</div>
+          <div className="text-xs text-toss-grey-500">{isFatLoss ? "최근 7일 운동 시간" : "최근 7일 총 볼륨"}</div>
           <div className="mt-1 text-2xl font-bold text-toss-grey-900 dark:text-white">
-            {Math.round(last7.volume).toLocaleString()}
+            {isFatLoss ? `${Math.round(last7.minutes)}분` : Math.round(last7.volume).toLocaleString()}
           </div>
         </div>
       </div>

@@ -1,6 +1,9 @@
+export type GoalMode = "fat_loss" | "muscle_gain";
+
 export interface User {
     id: string;
     full_name: string;
+    goal_mode: GoalMode;
     weight: number;
     muscle_mass: number;
     fat_percentage: number;

@@ -19,6 +19,11 @@
 
 > 참고: 이미 실행했어도 `IF NOT EXISTS`라 안전합니다.
 
+## 2.6. (권장) 목표 모드 컬럼 추가
+감량/근육 모드 전환 기능을 쓰려면 아래 패치를 1회 실행하세요.
+
+1. SQL Editor에서 `supabase/goal_mode_patch.sql` 실행
+
 ## 3. Connect to App
 1. 좌측 메뉴 `Project Settings` (톱니바퀴) → `API`.
 2. `Project URL`, `anon public key`, `service_role key` 확인

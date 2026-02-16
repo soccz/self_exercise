@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { DataProvider, User, UserPatch, Workout, WorkoutDraft } from "./types";
+import { normalizeGoalMode } from "@/lib/goal_mode";
 
 function toNumber(value: unknown, fallback = 0): number {
     if (typeof value === "number") return value;
@@ -31,6 +32,7 @@ export class SupabaseDataProvider implements DataProvider {
             if (!isRecord(raw)) return null;
             return {
                 ...(raw as Record<string, unknown>),
+                goal_mode: normalizeGoalMode(raw["goal_mode"]),
                 weight: toNumber(raw["weight"]),
                 muscle_mass: toNumber(raw["muscle_mass"]),
                 fat_percentage: toNumber(raw["fat_percentage"]),
@@ -63,6 +65,7 @@ export class SupabaseDataProvider implements DataProvider {
         if (!isRecord(raw)) return null;
         return {
             ...raw,
+            goal_mode: normalizeGoalMode(raw["goal_mode"]),
             weight: toNumber(raw["weight"]),
             muscle_mass: toNumber(raw["muscle_mass"]),
             fat_percentage: toNumber(raw["fat_percentage"]),

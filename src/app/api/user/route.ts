@@ -3,6 +3,7 @@ import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin"
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
 import { requireAppSession } from "@/lib/server/app_lock";
+import { normalizeGoalMode } from "@/lib/goal_mode";
 
 function getClientKey(req: Request): string {
   const xf = req.headers.get("x-forwarded-for");
@@ -24,7 +25,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("users")
     .select(
-      "id, full_name, weight, muscle_mass, fat_percentage, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, level, xp, current_streak",
+      "id, full_name, goal_mode, weight, muscle_mass, fat_percentage, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, level, xp, current_streak",
     )
     .eq("id", SINGLE_PLAYER_ID)
     .single();
@@ -64,6 +65,7 @@ export async function PATCH(req: Request) {
   // Allow-list to avoid accidentally writing unexpected keys.
   const allowed = [
     "full_name",
+    "goal_mode",
     "weight",
     "muscle_mass",
     "fat_percentage",
@@ -80,6 +82,10 @@ export async function PATCH(req: Request) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) {
       safePatch[key] = patch[key];
     }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "goal_mode")) {
+    safePatch.goal_mode = normalizeGoalMode((patch as Record<string, unknown>).goal_mode);
   }
 
   const { error } = await supabase

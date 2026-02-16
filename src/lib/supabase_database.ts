@@ -16,6 +16,7 @@ export interface Database {
         Row: {
           id: string;
           full_name: string | null;
+          goal_mode: "fat_loss" | "muscle_gain" | null;
           weight: number | string | null;
           muscle_mass: number | string | null;
           fat_percentage: number | string | null;

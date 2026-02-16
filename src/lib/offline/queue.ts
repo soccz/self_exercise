@@ -59,13 +59,18 @@ export function getQueueSize(): number {
   return load().length;
 }
 
+export function clearQueue(): void {
+  save([]);
+}
+
 export async function flushQueue(provider: {
   saveUser: (userId: string, patch: UserPatch) => Promise<void>;
   saveWorkout: (userId: string, workout: WorkoutDraft) => Promise<void>;
   deleteWorkout: (workoutId: string) => Promise<void>;
-}, userId: string): Promise<{ flushed: number; remaining: number }> {
+}, userId: string): Promise<{ flushed: number; remaining: number; lastError: string | null }> {
   const items = load();
   let flushed = 0;
+  let lastError: string | null = null;
 
   const remaining: QueueItem[] = [];
   // Oldest first to preserve intent (especially delete after add etc.)
@@ -81,7 +86,8 @@ export async function flushQueue(provider: {
         await provider.deleteWorkout(item.id);
       }
       flushed += 1;
-    } catch {
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
       // Stop early; keep item and everything older.
       remaining.push(item, ...ordered.slice(i + 1));
       break;
@@ -91,5 +97,5 @@ export async function flushQueue(provider: {
   // Convert remaining back to newest-first
   const newestFirst = remaining.reverse();
   save(newestFirst);
-  return { flushed, remaining: newestFirst.length };
+  return { flushed, remaining: newestFirst.length, lastError };
 }

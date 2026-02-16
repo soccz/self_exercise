@@ -187,6 +187,43 @@ function splitDigitSeparators(input: string): string {
     }
 }
 
+function isCardioName(name: string): boolean {
+    const n = name.toLowerCase();
+    return [
+        "run",
+        "running",
+        "runner",
+        "treadmill",
+        "walk",
+        "walking",
+        "bike",
+        "cycle",
+        "cycling",
+        "cardio",
+        "러닝",
+        "런",
+        "러너",
+        "러닝머신",
+        "걷기",
+        "사이클",
+        "자전거",
+        "유산소",
+    ].some((k) => n.includes(k));
+}
+
+function cardioMets(name: string, rpe?: number): number {
+    const n = name.toLowerCase();
+    let mets = 5;
+    if (["run", "running", "runner", "treadmill", "러닝", "런", "러닝머신"].some((k) => n.includes(k))) mets = 8;
+    else if (["walk", "walking", "걷기"].some((k) => n.includes(k))) mets = 4.3;
+    else if (["bike", "cycle", "cycling", "사이클", "자전거"].some((k) => n.includes(k))) mets = 6.8;
+    if (n.includes("incline") || n.includes("경사")) mets += 0.7;
+    if (typeof rpe === "number" && Number.isFinite(rpe)) {
+        mets += (Math.max(1, Math.min(10, rpe)) - 6) * 0.4;
+    }
+    return Math.max(3, Math.min(12, mets));
+}
+
 // Format: "Squat 100 5 5 @9" (Name Weight Reps Sets RPE)
 export function parseWorkoutText(text: string, userWeight: number = 75): ParsedWorkout | null {
     let cleanText = text.trim().replace(/^[-*]\s+/, "");
@@ -241,12 +278,22 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
 
     if (isNaN(weight) || isNaN(reps) || isNaN(sets)) return null;
 
+    const cardio = isCardioName(name);
+
     // Auto-Calculate Stats
-    const estimatedDuration = (sets * 3) + 5;
+    let estimatedDuration = (sets * 3) + 5;
+    if (cardio && reps <= 1 && sets <= 1 && weight > 0) {
+        // Cardio shorthand: "러닝머신 30 1 1" or "러닝머신 30"
+        estimatedDuration = Math.max(5, Math.round(weight));
+    }
 
     // METs Calculation
     let mets = 4.5;
-    if (weight > 60) mets = 6.0;
+    if (cardio) {
+        mets = cardioMets(name, rpe);
+    } else if (weight > 60) {
+        mets = 6.0;
+    }
 
     const durationHours = estimatedDuration / 60;
     const estimatedCalories = Math.round(mets * userWeight * durationHours);

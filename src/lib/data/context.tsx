@@ -5,12 +5,15 @@ import { DataProvider, User, UserPatch, Workout, WorkoutDraft } from "./types";
 import { MockDataProvider } from "./mock";
 import { SupabaseDataProvider } from "./supabase_service";
 import { MY_ID } from "../supabase";
-import { analyzePortfolio, calculateCalories, AssetAdvice, calculateTotalAssetValue } from "../quant/engine";
-import { enqueueUserPatch, enqueueWorkoutAdd, enqueueWorkoutDelete, flushQueue, getQueueSize } from "@/lib/offline/queue";
+import { calculateCalories, AssetAdvice, calculateTotalAssetValue } from "../quant/engine";
+import { enqueueUserPatch, enqueueWorkoutAdd, enqueueWorkoutDelete, flushQueue, getQueueSize, clearQueue } from "@/lib/offline/queue";
+import { analyzeAdviceForGoal, normalizeGoalMode } from "@/lib/goal_mode";
 
 // Default to Supabase in production. Opt-in to mock for local/demo.
 // Set NEXT_PUBLIC_USE_MOCK=true to force mock provider.
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true";
+
+export type SyncState = "idle" | "saved" | "syncing" | "done" | "conflict" | "error";
 
 interface DataContextType {
     user: User | null;
@@ -27,6 +30,10 @@ interface DataContextType {
     saveUser: (patch: UserPatch) => Promise<{ ok: true } | { ok: false; error: string }>;
     isLoading: boolean;
     offlineQueueSize: number;
+    syncState: SyncState;
+    syncMessage: string;
+    retrySync: () => Promise<void>;
+    resolveConflict: (strategy: "keep_local" | "use_server") => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType>({
@@ -43,6 +50,10 @@ const DataContext = createContext<DataContextType>({
     isLoading: true,
     recoveryStatus: { need: false, reasons: [] },
     offlineQueueSize: 0,
+    syncState: "idle",
+    syncMessage: "대기 중",
+    retrySync: async () => { },
+    resolveConflict: async () => { },
 });
 
 export function DataContextProvider({ children }: { children: React.ReactNode }) {
@@ -60,6 +71,8 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [offlineQueueSize, setOfflineQueueSize] = useState<number>(0);
+    const [syncState, setSyncState] = useState<SyncState>("idle");
+    const [syncMessage, setSyncMessage] = useState<string>("대기 중");
 
     const shouldQueueOffline = (err: unknown): boolean => {
         if (USE_MOCK) return false;
@@ -76,12 +89,18 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
         }
     };
 
+    const updateSync = useCallback((state: SyncState, message: string) => {
+        setSyncState(state);
+        setSyncMessage(message);
+    }, []);
+
     const refreshData = useCallback(async () => {
         setIsLoading(true);
         setError(null);
         const fallbackUser: User = {
             id: MY_ID,
             full_name: "Me",
+            goal_mode: "fat_loss",
             weight: 0,
             muscle_mass: 0,
             fat_percentage: 0,
@@ -106,7 +125,10 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
 
             // Always set a non-null user so the UI can hydrate and buttons work
             // even if Supabase is misconfigured/RLS blocks reads.
-            const currentUser = userData ?? fallbackUser;
+            const currentUser = {
+                ...(userData ?? fallbackUser),
+                goal_mode: normalizeGoalMode((userData ?? fallbackUser).goal_mode),
+            };
             setUser(currentUser);
             setRecentWorkouts(workouts);
 
@@ -126,14 +148,14 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
             }
 
             // Apply Client-Side Quant Logic (New Engine)
-            const advice = analyzePortfolio(workouts);
+            const advice = analyzeAdviceForGoal(currentUser.goal_mode, workouts);
             setAssetAdvice(advice);
 
             // Set 'Mission' to the top priority advice
             if (advice.length > 0) {
                 setTodayMission(advice[0].recommendedWorkout || advice[0].message);
             } else {
-                setTodayMission("자유 운동");
+                setTodayMission(currentUser.goal_mode === "fat_loss" ? "빠르게 걷기 20분" : "자유 운동");
             }
 
             // Calculate Asset Value
@@ -158,6 +180,7 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
                 const cals = calculateCalories(currentUser.weight, last.duration_minutes, last.average_rpe);
                 setLastWorkoutCalories(cals);
             }
+            refreshQueueSize();
         } catch (error) {
             const message =
                 error instanceof Error ? error.message : "Failed to load data";
@@ -173,83 +196,128 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
     const flushOffline = useCallback(async () => {
         if (USE_MOCK) return;
         if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+        const queued = getQueueSize();
+        if (queued <= 0) return;
+        updateSync("syncing", "동기화중");
         try {
             const res = await flushQueue(provider, MY_ID);
             refreshQueueSize();
             if (res.flushed > 0) {
                 await refreshData();
             }
-        } catch {
-            // ignore
+            if (res.remaining > 0) {
+                if (res.lastError && /conflict|409/i.test(res.lastError)) {
+                    updateSync("conflict", "충돌 감지: 복구 방식을 선택하세요.");
+                } else {
+                    updateSync("saved", `저장됨 (${res.remaining}건 대기)`);
+                }
+            } else {
+                updateSync("done", "완료");
+            }
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (/conflict|409/i.test(msg)) {
+                updateSync("conflict", "충돌 감지: 복구 방식을 선택하세요.");
+            } else {
+                updateSync("error", "동기화 실패");
+            }
         }
-    }, [provider, refreshData]);
+    }, [provider, refreshData, updateSync]);
 
     const saveWorkout = useCallback(async (workout: WorkoutDraft) => {
         setIsLoading(true);
         setError(null);
+        updateSync("syncing", "동기화중");
         try {
             await provider.saveWorkout(MY_ID, workout);
             await refreshData();
+            updateSync("done", "완료");
             return true;
         } catch (error) {
             console.error("Failed to save workout:", error);
             if (shouldQueueOffline(error)) {
                 enqueueWorkoutAdd(workout);
                 refreshQueueSize();
+                updateSync("saved", `저장됨 (${getQueueSize()}건 대기)`);
                 return true;
             }
             setError(error instanceof Error ? error.message : "Failed to save workout");
+            updateSync("error", "저장 실패");
             return false;
         } finally {
             setIsLoading(false);
         }
-    }, [provider, refreshData]);
+    }, [provider, refreshData, updateSync]);
 
     const saveUser = useCallback(
         async (patch: UserPatch): Promise<{ ok: true } | { ok: false; error: string }> => {
         setIsLoading(true);
         setError(null);
+        updateSync("syncing", "동기화중");
         try {
             await provider.saveUser(MY_ID, patch);
             await refreshData();
+            updateSync("done", "완료");
             return { ok: true };
         } catch (error) {
             console.error("Failed to save user:", error);
             if (shouldQueueOffline(error)) {
                 enqueueUserPatch(patch);
                 refreshQueueSize();
+                updateSync("saved", `저장됨 (${getQueueSize()}건 대기)`);
                 return { ok: true };
             }
             const msg = error instanceof Error ? error.message : "Failed to save user";
             setError(msg);
+            updateSync("error", "저장 실패");
             return { ok: false, error: msg };
         } finally {
             setIsLoading(false);
         }
         },
-        [provider, refreshData],
+        [provider, refreshData, updateSync],
     );
 
     const deleteWorkout = useCallback(async (id: string) => {
         setIsLoading(true);
         setError(null);
+        updateSync("syncing", "동기화중");
         try {
             await provider.deleteWorkout(id);
             await refreshData();
+            updateSync("done", "완료");
             return true;
         } catch (error) {
             console.error("Failed to delete workout:", error);
             if (shouldQueueOffline(error)) {
                 enqueueWorkoutDelete(id);
                 refreshQueueSize();
+                updateSync("saved", `저장됨 (${getQueueSize()}건 대기)`);
                 return true;
             }
             setError(error instanceof Error ? error.message : "Failed to delete workout");
+            updateSync("error", "삭제 실패");
             return false;
         } finally {
             setIsLoading(false);
         }
-    }, [provider, refreshData]);
+    }, [provider, refreshData, updateSync]);
+
+    const retrySync = useCallback(async () => {
+        await flushOffline();
+    }, [flushOffline]);
+
+    const resolveConflict = useCallback(async (strategy: "keep_local" | "use_server") => {
+        if (strategy === "use_server") {
+            clearQueue();
+            refreshQueueSize();
+            await refreshData();
+            updateSync("done", "완료 (서버 버전 적용)");
+            return;
+        }
+        updateSync("saved", `저장됨 (${getQueueSize()}건 대기)`);
+        await flushOffline();
+    }, [flushOffline, refreshData, updateSync]);
 
     useEffect(() => {
         refreshQueueSize();
@@ -267,7 +335,7 @@ export function DataContextProvider({ children }: { children: React.ReactNode })
     }, [flushOffline]);
 
     return (
-        <DataContext.Provider value={{ user, recentWorkouts, todayMission, lastWorkoutCalories, error, refreshData, saveWorkout, deleteWorkout, saveUser, isLoading, recoveryStatus, assetAdvice, totalAssetValue, offlineQueueSize }}>
+        <DataContext.Provider value={{ user, recentWorkouts, todayMission, lastWorkoutCalories, error, refreshData, saveWorkout, deleteWorkout, saveUser, isLoading, recoveryStatus, assetAdvice, totalAssetValue, offlineQueueSize, syncState, syncMessage, retrySync, resolveConflict }}>
             {children}
         </DataContext.Provider>
     );

@@ -8,9 +8,11 @@
 - Deploy: Vercel (API Routes 사용)
 
 ## What You Get
+- **목표 모드 전환**: 감량(`fat_loss`) / 근육(`muscle_gain`) 모드별 추천·대시보드 제공
 - **자산(3대 1RM) 자동 반영**: 로그로 추정 1RM을 PR 기준으로 자동 업데이트
 - **기록 UX**: 마지막 기록 불러오기 + 템플릿 + 저장 토스트
-- **텔레그램 명령어**: `/help`, `/status`, `/rec`, `/undo`, `/edit`, `/export`, `/remind`
+- **텔레그램 퀵 버튼**: 기록/오늘 추천/마지막 수정/도움말 고정 버튼
+- **텔레그램 명령어**: `/help`, `/status`, `/rec`, `/mode`, `/undo`, `/edit`, `/export`, `/remind`
 - **리마인더 자동화(무료)**: GitHub Actions Cron -> `/api/cron/remind`
 - **오프라인 임시저장**: 네트워크 끊겨도 큐에 저장 후 온라인 시 자동 반영
 - **최소 보안(App Lock)**: `APP_SECRET`로 write API 잠금(로그인 없이)
@@ -41,6 +43,7 @@ npm run dev
 
 - `/status` 또는 `자산`: 자산 리포트
 - `/rec` 또는 `추천`: 추천
+- `/mode fat|muscle`: 감량/근육 모드 전환
 - `/name 홍길동`: 이름 변경
 - `/last`: 마지막 운동 보기
 - `/undo` (또는 `/undo!`): 방금 기록 되돌리기(최근 30분 / 강제)
@@ -56,4 +59,3 @@ npm run dev
 ## Security Notes
 - `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`은 **절대 Git에 커밋하지 마세요**.
 - 공개 배포면 최소 `APP_SECRET`를 설정하세요(임의 요청으로 DB 변경 방지).
-
