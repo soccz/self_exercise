@@ -91,7 +91,12 @@ export function AssetView() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: 0.1 }}
-                className="bg-black text-white rounded-[2rem] p-7 shadow-2xl relative overflow-hidden"
+                className={cn(
+                    "rounded-[2rem] p-7 relative overflow-hidden",
+                    isFatLoss
+                        ? "bg-black text-white shadow-2xl"
+                        : "bg-gradient-to-br from-sky-50 via-white to-indigo-50 text-slate-900 border border-sky-100 shadow-xl",
+                )}
             >
                 <svg className="absolute bottom-0 left-0 w-full h-32 opacity-20" preserveAspectRatio="none">
                     <path d="M0,80 Q50,60 100,80 T200,50 T300,90 T400,40 V150 H0 Z" fill="url(#grad1)" />
@@ -128,25 +133,25 @@ export function AssetView() {
                 ) : (
                     <div className="relative z-10">
                         <div className="flex justify-between items-start mb-2">
-                            <span className="text-gray-400 font-medium text-sm">3대 운동 합계 (Total 1RM)</span>
-                            <div className="flex items-center space-x-1 text-green-400 text-sm font-bold bg-green-400/10 px-2 py-0.5 rounded-full">
+                            <span className="text-slate-500 font-medium text-sm">3대 운동 합계 (Total 1RM)</span>
+                            <div className="flex items-center space-x-1 text-sky-700 text-sm font-bold bg-sky-100 px-2 py-0.5 rounded-full">
                                 <TrendingUp size={14} />
                                 <span>Lv.{user.level}</span>
                             </div>
                         </div>
                         <div className="text-5xl font-bold mb-4 tracking-tight">
-                            {totalAssetValue.toLocaleString()} <span className="text-2xl text-zinc-500">kg</span>
+                            {totalAssetValue.toLocaleString()} <span className="text-2xl text-slate-500">kg</span>
                         </div>
 
                         <div className="grid grid-cols-2 gap-4 mt-6">
-                            <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm">
-                                <div className="text-gray-400 text-xs mb-1">상체 지수</div>
+                            <div className="bg-white/85 rounded-2xl p-3 border border-sky-100">
+                                <div className="text-slate-500 text-xs mb-1">상체 지수</div>
                                 <div className="text-lg font-bold">
                                     {user.estimated_1rm_bench > 0 ? "Tracking" : "No Data"}
                                 </div>
                             </div>
-                            <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm">
-                                <div className="text-gray-400 text-xs mb-1">하체 지수</div>
+                            <div className="bg-white/85 rounded-2xl p-3 border border-sky-100">
+                                <div className="text-slate-500 text-xs mb-1">하체 지수</div>
                                 <div className="text-lg font-bold">
                                     {user.estimated_1rm_squat > 0 ? "Tracking" : "No Data"}
                                 </div>

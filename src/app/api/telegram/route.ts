@@ -107,16 +107,23 @@ async function linkTelegramChat(supabaseAdmin: SupabaseClient<Database>, chatId:
     }
 }
 
-function quickActionRows(goalMode: GoalMode): string[][] {
+type TgKeyboardButton = {
+    text: string;
+    web_app?: { url: string };
+};
+
+function quickActionRows(goalMode: GoalMode): TgKeyboardButton[][] {
     if (goalMode === "muscle_gain") {
         return [
-            ["기록", "오늘 추천"],
-            ["마지막 수정", "도움말"],
+            [{ text: "기록" }, { text: "오늘 추천" }],
+            [{ text: "마지막 수정" }, { text: "상태" }],
+            [{ text: "도움말" }, { text: "📱 앱 열기", web_app: { url: APP_URL } }],
         ];
     }
     return [
-        ["유산소 기록", "오늘 추천"],
-        ["마지막 수정", "도움말"],
+        [{ text: "유산소 기록" }, { text: "오늘 추천" }],
+        [{ text: "마지막 수정" }, { text: "상태" }],
+        [{ text: "도움말" }, { text: "📱 앱 열기", web_app: { url: APP_URL } }],
     ];
 }
 
@@ -125,10 +132,10 @@ async function sendMessage(chatId: string, text: string, showButton: boolean = f
 
     const body: Record<string, unknown> = {
         chat_id: chatId,
-        text: showButton ? `${text}\n\n📱 앱: \`${APP_URL}\`` : text,
+        text: showButton ? `${text}\n\n[📱 앱에서 열기](${APP_URL})` : text,
         parse_mode: 'Markdown',
         reply_markup: {
-            keyboard: quickActionRows(goalMode).map((row) => row.map((label) => ({ text: label }))),
+            keyboard: quickActionRows(goalMode),
             resize_keyboard: true,
             is_persistent: true,
             one_time_keyboard: false,
@@ -258,6 +265,11 @@ export async function POST(req: NextRequest) {
 
         if (text === "오늘 추천") text = "/rec";
         if (text === "도움말") text = "/help";
+        if (text === "상태") text = "/status";
+        if (text === "📱 앱 열기") {
+            await send(`[앱 열기](${APP_URL})`, true);
+            return json({ ok: true });
+        }
         if (text === "마지막 수정") {
             const { data: rows } = await supabaseAdmin
                 .from("workouts")
