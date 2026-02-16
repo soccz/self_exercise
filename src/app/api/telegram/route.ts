@@ -586,7 +586,7 @@ export async function POST(req: NextRequest) {
                         `"${mainAdvice}"`,
                         "",
                         `최근 운동: ${workouts[0] ? workouts[0].workout_date : "없음"}`,
-                    ].join("\\n");
+                    ].join("\n");
                 }
 
                 const squat = typeof user.estimated_1rm_squat === "string" ? Number(user.estimated_1rm_squat) : (user.estimated_1rm_squat || 0);
@@ -604,7 +604,7 @@ export async function POST(req: NextRequest) {
                     `"${mainAdvice}"`,
                     "",
                     `최근 운동: ${workouts[0] ? workouts[0].workout_date : "없음"}`,
-                ].join("\\n");
+                ].join("\n");
             })();
 
             await send(report, true);
