@@ -25,13 +25,14 @@ jobs:
             exit 1
           fi
 
-          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-}}"
+          CANONICAL_BASE_URL="https://self-exercise.vercel.app"
+          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-$CANONICAL_BASE_URL}}"
           BASE_URL="$(printf '%s' "$BASE_URL" | tr -d '\r' | sed 's/^ *//; s/ *$//')"
           if [ -z "${BASE_URL:-}" ]; then
             echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
             echo "Examples:"
-            echo "- CRON_BASE_URL: https://<your-domain>"
-            echo "- CRON_ENDPOINT: https://<your-domain>/api/cron/briefing"
+            echo "- CRON_BASE_URL: https://self-exercise.vercel.app"
+            echo "- CRON_ENDPOINT: https://self-exercise.vercel.app/api/cron/briefing"
             exit 1
           fi
 
@@ -45,6 +46,8 @@ jobs:
           elif [ -n "${CRON_ENDPOINT:-}" ]; then
             # Strip /api/... from the endpoint to get base
             BASE=$(echo "$CRON_ENDPOINT" | sed 's|/api/.*||')
+          else
+            BASE="$CANONICAL_BASE_URL"
           fi
           
           # Clean trailing slash

@@ -19,14 +19,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-}}"
+          CANONICAL_BASE_URL="https://self-exercise.vercel.app"
+          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-$CANONICAL_BASE_URL}}"
           BASE_URL="$(printf '%s' "$BASE_URL" | tr -d '\r' | sed 's/^ *//; s/ *$//')"
 
           if [ -z "${BASE_URL:-}" ]; then
             echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
             echo "Examples:"
-            echo "- CRON_BASE_URL: https://<your-domain>"
-            echo "- CRON_ENDPOINT: https://<your-domain>/api/cron/weekly"
+            echo "- CRON_BASE_URL: https://self-exercise.vercel.app"
+            echo "- CRON_ENDPOINT: https://self-exercise.vercel.app/api/cron/weekly"
             exit 1
           fi
 
@@ -54,4 +55,3 @@ jobs:
             echo "Request failed with HTTP $HTTP_CODE"
             exit 1
           fi
-

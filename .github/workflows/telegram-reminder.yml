@@ -19,38 +19,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-}}"
+          CANONICAL_BASE_URL="https://self-exercise.vercel.app"
+          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-$CANONICAL_BASE_URL}}"
           BASE_URL="$(printf '%s' "$BASE_URL" | tr -d '\r' | sed 's/^ *//; s/ *$//')"
-
-          if [ -z "${BASE_URL:-}" ]; then
-            echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
-            echo "Examples:"
-            echo "- CRON_BASE_URL: https://<your-domain>"
-            echo "- CRON_ENDPOINT: https://<your-domain>/api/cron/remind"
-            exit 1
-          fi
 
           if [ -z "$APP_SECRET" ]; then
             echo "Missing APP_SECRET secret"
             exit 1
           fi
 
-          # Logic: If CRON_BASE_URL is set, use it.
-          # If only CRON_ENDPOINT is set, try to extract base.
-          
           TARGET_PATH="/api/cron/remind"
-          
+
           if [ -n "${CRON_BASE_URL:-}" ]; then
             BASE="$CRON_BASE_URL"
           elif [ -n "${CRON_ENDPOINT:-}" ]; then
-            # Strip /api/... from the endpoint to get base
             BASE=$(echo "$CRON_ENDPOINT" | sed 's|/api/.*||')
           else
-            echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
-            exit 1
+            BASE="$CANONICAL_BASE_URL"
           fi
-          
-          # Clean trailing slash
+
           BASE="${BASE%/}"
           URL="$BASE$TARGET_PATH"
 

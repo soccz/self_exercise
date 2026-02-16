@@ -119,9 +119,14 @@ E --> B
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_SECRET`
 - `APP_URL`
+- 권장 고정값: `APP_URL=https://self-exercise.vercel.app`
 
 3. Telegram webhook를 현재 배포 도메인으로 설정
-- `https://<your-domain>/api/telegram`
+- `https://self-exercise.vercel.app/api/telegram`
+
+4. GitHub Actions 시크릿 통일
+- `CRON_BASE_URL=https://self-exercise.vercel.app`
+- (선택) `CRON_ENDPOINT`를 쓰는 경우도 동일 도메인으로 설정
 
 상세 문서는 아래 참고:
 - `DB_SETUP.md`

@@ -27,16 +27,16 @@
 1. BotFather에서 봇 생성 후 `TELEGRAM_BOT_TOKEN` 발급
 2. Vercel env에 추가
 - `TELEGRAM_BOT_TOKEN=...`
-- `APP_URL=https://<your-vercel-domain>`
+- `APP_URL=https://self-exercise.vercel.app`
 - (권장) `TELEGRAM_WEBHOOK_SECRET=랜덤문자열`
 3. webhook 설정
-- URL: `https://<your-vercel-domain>/api/telegram`
+- URL: `https://self-exercise.vercel.app/api/telegram`
 - secret_token: `TELEGRAM_WEBHOOK_SECRET`와 동일하게 (권장)
 
 예시(curl):
 ```bash
 curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
-  -d "url=https://<your-vercel-domain>/api/telegram" \
+  -d "url=https://self-exercise.vercel.app/api/telegram" \
   -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
 ```
 
@@ -63,7 +63,8 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 3. GitHub Actions Secrets 추가
 - GitHub 레포 `Settings -> Secrets and variables -> Actions`
 - `APP_SECRET`: Vercel env의 `APP_SECRET`와 동일
-- `CRON_ENDPOINT`: `https://<your-vercel-domain>/api/cron/remind`
+- `CRON_BASE_URL`: `https://self-exercise.vercel.app` (권장)
+- `CRON_ENDPOINT`: `https://self-exercise.vercel.app/api/cron/remind` (레거시 호환)
 
 4. 스케줄 확인
 - `.github/workflows/telegram-reminder.yml`은 10분마다 실행되며, API가 DB 설정(time/tz/중복방지)을 보고 실제 전송 여부를 결정합니다.
