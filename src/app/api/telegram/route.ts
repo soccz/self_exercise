@@ -13,6 +13,7 @@ import { applyBig3Prs, estimateBig3FromLogs, recomputeBig3Prs } from "@/lib/serv
 import { analyzeAdviceForGoal, normalizeGoalMode } from "@/lib/goal_mode";
 import { consultCouncil } from "@/lib/quant/ensemble";
 import type { CouncilCondition, CouncilWorkout } from "@/lib/quant/types";
+import { quickActionKeyboard } from "@/lib/telegram/quick_actions";
 
 // Telegram Bot Token (from env)
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -115,26 +116,6 @@ async function linkTelegramChat(supabaseAdmin: SupabaseClient<Database>, chatId:
     }
 }
 
-type TgKeyboardButton = {
-    text: string;
-    web_app?: { url: string };
-};
-
-function quickActionRows(goalMode: GoalMode): TgKeyboardButton[][] {
-    if (goalMode === "muscle_gain") {
-        return [
-            [{ text: "기록" }, { text: "오늘 추천" }],
-            [{ text: "마지막 수정" }, { text: "상태" }],
-            [{ text: "도움말" }, { text: "📱 앱 열기", web_app: { url: APP_URL } }],
-        ];
-    }
-    return [
-        [{ text: "유산소 기록" }, { text: "오늘 추천" }],
-        [{ text: "마지막 수정" }, { text: "상태" }],
-        [{ text: "도움말" }, { text: "📱 앱 열기", web_app: { url: APP_URL } }],
-    ];
-}
-
 async function sendMessage(chatId: string, text: string, showButton: boolean = false, goalMode: GoalMode = "fat_loss") {
     if (!BOT_TOKEN) return;
 
@@ -142,13 +123,7 @@ async function sendMessage(chatId: string, text: string, showButton: boolean = f
         chat_id: chatId,
         text: showButton ? `${text}\n\n[📱 앱에서 열기](${APP_URL})` : text,
         parse_mode: 'Markdown',
-        reply_markup: {
-            keyboard: quickActionRows(goalMode),
-            resize_keyboard: true,
-            is_persistent: true,
-            one_time_keyboard: false,
-            input_field_placeholder: goalMode === "fat_loss" ? "예: 러닝머신 30 8 1" : "예: 스쿼트 100 5 5",
-        },
+        reply_markup: quickActionKeyboard(goalMode, APP_URL),
     };
 
     if (showButton) {
@@ -209,7 +184,7 @@ function helpText(): string {
         "- `/remind test`: 리마인더 테스트(즉시 1회)",
         "- `/debug`: 연결 상태 점검",
         "",
-        "하단 고정 버튼: 기록 / 오늘 추천 / 마지막 수정 / 도움말",
+        "하단 고정 버튼: 기록 / 오늘 추천 / 컨디션 입력 / 상태 / 마지막 수정 / 앱 열기",
         "",
         "팁: 웹에서도 기록/수정이 가능합니다.",
     ].join("\n");
@@ -279,6 +254,7 @@ export async function POST(req: NextRequest) {
         if (text === "오늘 추천") text = "/rec";
         if (text === "도움말") text = "/help";
         if (text === "상태") text = "/status";
+        if (text === "컨디션 입력") text = "/cond";
         if (text === "📱 앱 열기") {
             await send(`[앱 열기](${APP_URL})`, true);
             return json({ ok: true });
@@ -683,6 +659,7 @@ export async function POST(req: NextRequest) {
                         "",
                         `📢 오늘 액션`,
                         `"${mainAdvice}"`,
+                        "▶ 지금 할 일: `러닝머신 20 7.5 1`",
                         "",
                         `최근 운동: ${workouts[0] ? workouts[0].workout_date : "없음"}`,
                     ].join("\n");
@@ -701,6 +678,7 @@ export async function POST(req: NextRequest) {
                     "",
                     "📢 투자 의견 (Iron Analyst)",
                     `"${mainAdvice}"`,
+                    "▶ 지금 할 일: `스쿼트 80 5 3`",
                     "",
                     `최근 운동: ${workouts[0] ? workouts[0].workout_date : "없음"}`,
                 ].join("\n");
@@ -762,6 +740,9 @@ export async function POST(req: NextRequest) {
             if (council.primary) {
                 const agent = council.primary.agent === "analyst" ? "Analyst" : council.primary.agent === "physio" ? "Physio" : "Psych";
                 const title = goalMode === "fat_loss" ? "🧠 *감량 Council 추천*" : "🧠 *근육 Council 추천*";
+                const quickActs = goalMode === "fat_loss"
+                    ? ["`러닝머신 25 7.5 1`", "`사이클 20분 18km/h`"]
+                    : ["`스쿼트 80 5 3`", "`벤치 55 8 3 @7.5`"];
                 const lines = [
                     title,
                     "",
@@ -769,6 +750,10 @@ export async function POST(req: NextRequest) {
                     council.primary.action,
                     council.primary.reason[0] ? `근거: ${council.primary.reason[0]}` : null,
                     topPick?.recommendedWorkout ? `추천 세션: ${topPick.recommendedWorkout}` : null,
+                    "",
+                    "*바로 실행*",
+                    `- ${quickActs[0]}`,
+                    `- ${quickActs[1]}`,
                     "",
                     "*추가 의견*",
                     ...council.top.slice(0, 3).map((a) => {

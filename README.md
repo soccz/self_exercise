@@ -80,10 +80,12 @@ npm run test:ensemble
 |---|---|
 | `기록` / `유산소 기록` | 입력 예시 안내 |
 | `오늘 추천` | 모드 기반 추천 표시 |
-| `마지막 수정` | `/edit ...` 예시 제공 |
+| `컨디션 입력` | `/cond` 입력 가이드/오늘 컨디션 확인 |
 | `상태` | 현재 상태 리포트 |
-| `도움말` | 명령어 목록 |
+| `마지막 수정` | `/edit ...` 예시 제공 |
 | `앱 열기` | 웹 앱 바로 열기 |
+
+`cron(브리핑/주간/월간/리마인더)`으로 오는 메시지도 동일 6버튼을 유지합니다.
 
 ### 명령어 치트시트
 | 명령어 | 설명 |
@@ -117,6 +119,7 @@ E --> B
 - 기존 DB면 추가:
   - `supabase/telegram_reminder_patch.sql`
   - `supabase/goal_mode_patch.sql`
+  - `supabase/health_personalization_patch.sql`
 
 2. Vercel 환경변수 설정
 - `NEXT_PUBLIC_SUPABASE_URL`

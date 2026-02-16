@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin";
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
+import type { GoalMode } from "@/lib/data/types";
+import { quickActionKeyboard } from "@/lib/telegram/quick_actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,16 +45,15 @@ function requireCronAuth(req: Request): { ok: true } | { ok: false; status: numb
   return { ok: true };
 }
 
-async function sendMessage(chatId: string, text: string): Promise<boolean> {
+async function sendMessage(chatId: string, text: string, goalMode: GoalMode): Promise<boolean> {
   if (!BOT_TOKEN) return false;
 
   const body: Record<string, unknown> = {
     chat_id: chatId,
-    text,
+    text: `${text}\n\n[📱 앱에서 열기](${APP_URL})`,
     parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [[{ text: "📱 앱에서 기록하기", url: APP_URL }]],
-    },
+    reply_markup: quickActionKeyboard(goalMode, APP_URL),
+    disable_web_page_preview: true,
   };
 
   try {
@@ -159,7 +160,7 @@ export async function POST(req: Request) {
 
     const sent = await sendMessage(chatId, goalMode === "fat_loss"
       ? `⏰ *${name}* 오늘 유산소 기록이 없습니다.\n\n예: \`러닝머신 30 8 1\`\n또는 앱에서 기록 버튼을 눌러주세요.`
-      : `⏰ *${name}* 오늘 운동 기록이 없습니다.\n\n예: \`스쿼트 100 5 5\`\n또는 앱에서 기록 버튼을 눌러주세요.`);
+      : `⏰ *${name}* 오늘 운동 기록이 없습니다.\n\n예: \`스쿼트 100 5 5\`\n또는 앱에서 기록 버튼을 눌러주세요.`, goalMode);
 
     if (!sent) {
       return json(requestId, { requestId, ok: false, error: "Telegram send failed" }, { status: 502 });

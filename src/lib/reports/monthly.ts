@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase_database";
 import type { GoalMode } from "@/lib/data/types";
 import { estimateWorkoutCalories } from "@/lib/quant/engine";
+import { consultCouncil } from "@/lib/quant/ensemble";
+import type { CouncilCondition, CouncilWorkout } from "@/lib/quant/types";
 
 type WorkoutRow = Database["public"]["Tables"]["workouts"]["Row"];
 type UserRow = Database["public"]["Tables"]["users"]["Row"];
@@ -121,7 +123,7 @@ export async function buildMonthlyTelegramReport(
   const end = `${py}-${pad2(pm)}-${pad2(lastDayOfMonth(py, pm))}`;
   const ym = `${py}-${pad2(pm)}`;
 
-  const [{ data: workouts, error: wErr }, { data: user, error: uErr }] = await Promise.all([
+  const [{ data: workouts, error: wErr }, { data: user, error: uErr }, { data: conditions, error: cErr }] = await Promise.all([
     supabase
       .from("workouts")
       .select("workout_date, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, logs, title")
@@ -134,6 +136,13 @@ export async function buildMonthlyTelegramReport(
       .select("current_streak, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, goal_mode, weight")
       .eq("id", userId)
       .single(),
+    supabase
+      .from("daily_conditions")
+      .select("condition_date, sleep_hours, fatigue_score, stress_score, soreness_score, resting_hr")
+      .eq("user_id", userId)
+      .gte("condition_date", start)
+      .lte("condition_date", end)
+      .order("condition_date", { ascending: true }),
   ]);
 
   if (wErr) {
@@ -142,6 +151,9 @@ export async function buildMonthlyTelegramReport(
   if (uErr) {
     return { text: `❌ 월간 리포트 생성 실패: ${uErr.message}`, meta: { start, end, ym } };
   }
+  const safeConditions = cErr
+    ? (cErr.message.includes("daily_conditions") && cErr.message.includes("does not exist") ? [] : [])
+    : (conditions ?? []);
 
   const rows = workouts ?? [];
   const mode: GoalMode = options.goalMode ?? ((user as Pick<UserRow, "goal_mode"> | null)?.goal_mode === "muscle_gain" ? "muscle_gain" : "fat_loss");
@@ -246,6 +258,31 @@ export async function buildMonthlyTelegramReport(
     const l = 100 - u;
     return { u, l };
   })();
+  const council = consultCouncil({
+    now: new Date(`${end}T00:00:00Z`),
+    user: {
+      id: userId,
+      mode,
+      weight: userWeight,
+      current_streak: streak,
+    },
+    workouts: rows.map((r) => ({
+      workout_date: r.workout_date ?? end,
+      total_volume: toNumber(r.total_volume, 0),
+      average_rpe: toNumber(r.average_rpe, 0),
+      duration_minutes: toNumber(r.duration_minutes, 0),
+      estimated_calories: toNumber(r.estimated_calories, 0),
+      cardio_distance_km: toNumber(r.cardio_distance_km, 0),
+    })) as CouncilWorkout[],
+    conditions: safeConditions.map((c) => ({
+      condition_date: c.condition_date,
+      sleep_hours: toNumber(c.sleep_hours, 0) || undefined,
+      fatigue_score: c.fatigue_score ?? undefined,
+      stress_score: c.stress_score ?? undefined,
+      soreness_score: c.soreness_score ?? undefined,
+      resting_hr: c.resting_hr ?? undefined,
+    })) as CouncilCondition[],
+  });
 
   const lines: string[] = [];
   if (mode === "fat_loss") {
@@ -278,6 +315,15 @@ export async function buildMonthlyTelegramReport(
     if (top.length > 0) lines.push(`Top 종목: ${top.slice(0, 3).map((t) => `\`${t}\``).join(", ")}`);
     lines.push("");
     lines.push(`💬 *다음 액션*: ${muscleAdvice}`);
+  }
+
+  if (council.top.length > 0) {
+    lines.push("");
+    lines.push("*🧠 Council 합의*");
+    for (const advice of council.top.slice(0, 2)) {
+      const agent = advice.agent === "analyst" ? "Analyst" : advice.agent === "physio" ? "Physio" : "Psych";
+      lines.push(`- [${agent}] ${advice.headline}: ${advice.action}`);
+    }
   }
 
   return { text: lines.join("\n"), meta: { start, end, ym } };

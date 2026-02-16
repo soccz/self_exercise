@@ -3,6 +3,8 @@ import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin"
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
 import { buildMonthlyTelegramReport } from "@/lib/reports/monthly";
+import type { GoalMode } from "@/lib/data/types";
+import { quickActionKeyboard } from "@/lib/telegram/quick_actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,16 +31,15 @@ function requireCronAuth(req: Request): { ok: true } | { ok: false; status: numb
   return { ok: true };
 }
 
-async function sendMessage(chatId: string, text: string): Promise<boolean> {
+async function sendMessage(chatId: string, text: string, goalMode: GoalMode): Promise<boolean> {
   if (!BOT_TOKEN) return false;
 
   const body: Record<string, unknown> = {
     chat_id: chatId,
-    text,
+    text: `${text}\n\n[📱 앱에서 열기](${APP_URL})`,
     parse_mode: "Markdown",
-    reply_markup: {
-      inline_keyboard: [[{ text: "📱 앱 열기", url: APP_URL }]],
-    },
+    reply_markup: quickActionKeyboard(goalMode, APP_URL),
+    disable_web_page_preview: true,
   };
 
   try {
@@ -91,7 +92,7 @@ export async function POST(req: Request) {
     const supabase = getSupabaseAdmin();
     const { data: user, error: userError } = await supabase
       .from("users")
-      .select("telegram_chat_id, telegram_timezone")
+      .select("telegram_chat_id, telegram_timezone, goal_mode")
       .eq("id", SINGLE_PLAYER_ID)
       .single();
 
@@ -109,9 +110,10 @@ export async function POST(req: Request) {
     }
 
     const timeZone = (user.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
+    const goalMode: GoalMode = user.goal_mode === "muscle_gain" ? "muscle_gain" : "fat_loss";
     const report = await buildMonthlyTelegramReport(supabase, SINGLE_PLAYER_ID, timeZone);
 
-    const sent = await sendMessage(user.telegram_chat_id, report.text);
+    const sent = await sendMessage(user.telegram_chat_id, report.text, goalMode);
     if (!sent) {
       const res = NextResponse.json({ requestId, ok: false, error: "Telegram send failed" }, { status: 502 });
       res.headers.set("x-request-id", requestId);

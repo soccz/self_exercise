@@ -6,6 +6,8 @@ import { estimateWorkoutCalories } from "@/lib/quant/engine";
 import { consultCouncil } from "@/lib/quant/ensemble";
 import type { CouncilCondition, CouncilWorkout } from "@/lib/quant/types";
 import type { Json } from "@/lib/supabase_database";
+import type { GoalMode } from "@/lib/data/types";
+import { quickActionKeyboard } from "@/lib/telegram/quick_actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,16 +39,15 @@ function requireCronAuth(req: Request): { ok: true } | { ok: false; status: numb
     return { ok: true };
 }
 
-async function sendMessage(chatId: string, text: string): Promise<boolean> {
+async function sendMessage(chatId: string, text: string, goalMode: GoalMode): Promise<boolean> {
     if (!BOT_TOKEN) return false;
 
     const body: Record<string, unknown> = {
         chat_id: chatId,
-        text,
+        text: `${text}\n\n[📱 앱에서 열기](${APP_URL})`,
         parse_mode: "Markdown",
-        reply_markup: {
-            inline_keyboard: [[{ text: "📱 앱 열기", url: APP_URL }]],
-        },
+        reply_markup: quickActionKeyboard(goalMode, APP_URL),
+        disable_web_page_preview: true,
     };
 
     try {
@@ -252,7 +253,7 @@ export async function POST(req: Request) {
             console.error("cron briefing: advice log failed", logErr);
         }
 
-        const sent = await sendMessage(user.telegram_chat_id, msg);
+        const sent = await sendMessage(user.telegram_chat_id, msg, goalMode);
         if (!sent) {
             return NextResponse.json({ requestId, ok: false, error: "Telegram send failed" }, { status: 502 });
         }
