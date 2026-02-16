@@ -547,7 +547,7 @@ export async function POST(req: NextRequest) {
                 .select('id, user_id, routine_id, workout_date, title, total_volume, average_rpe, duration_minutes, logs, feedback, mood, created_at')
                 .eq('user_id', MY_ID)
                 .order('workout_date', { ascending: false })
-                .limit(5);
+                .limit(200);
 
             if (userError) console.error("Supabase user select error:", userError);
             if (workoutsError) console.error("Supabase workouts select error:", workoutsError);
