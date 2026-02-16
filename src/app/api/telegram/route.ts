@@ -121,7 +121,7 @@ async function sendMessage(chatId: string, text: string, showButton: boolean = f
 
     const body: Record<string, unknown> = {
         chat_id: chatId,
-        text: showButton ? `${text}\n\n[📱 앱에서 열기](${APP_URL})` : text,
+        text,
         parse_mode: 'Markdown',
         reply_markup: quickActionKeyboard(goalMode, APP_URL),
     };
@@ -256,7 +256,7 @@ export async function POST(req: NextRequest) {
         if (text === "상태") text = "/status";
         if (text === "컨디션 입력") text = "/cond";
         if (text === "📱 앱 열기") {
-            await send(`[앱 열기](${APP_URL})`, true);
+            await send("하단 `📱 앱 열기` 버튼으로 실행해 주세요.", true);
             return json({ ok: true });
         }
         if (text === "마지막 수정") {

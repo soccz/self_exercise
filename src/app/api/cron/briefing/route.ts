@@ -44,10 +44,9 @@ async function sendMessage(chatId: string, text: string, goalMode: GoalMode): Pr
 
     const body: Record<string, unknown> = {
         chat_id: chatId,
-        text: `${text}\n\n[📱 앱에서 열기](${APP_URL})`,
+        text,
         parse_mode: "Markdown",
         reply_markup: quickActionKeyboard(goalMode, APP_URL),
-        disable_web_page_preview: true,
     };
 
     try {
