@@ -25,20 +25,26 @@ jobs:
             exit 1
           fi
 
+          BASE_URL="${CRON_BASE_URL:-${CRON_ENDPOINT:-}}"
+          BASE_URL="$(printf '%s' "$BASE_URL" | tr -d '\r' | sed 's/^ *//; s/ *$//')"
+          if [ -z "${BASE_URL:-}" ]; then
+            echo "Missing CRON_BASE_URL or CRON_ENDPOINT secret"
+            echo "Examples:"
+            echo "- CRON_BASE_URL: https://<your-domain>"
+            echo "- CRON_ENDPOINT: https://<your-domain>/api/cron/briefing"
+            exit 1
+          fi
+
           # Logic: If CRON_BASE_URL is set, use it.
           # If only CRON_ENDPOINT is set, try to extract base.
-          # Fallback to default v2 domain.
           
           TARGET_PATH="/api/cron/briefing"
-          DEFAULT_DOMAIN="https://self-exercise.vercel.app"
           
           if [ -n "${CRON_BASE_URL:-}" ]; then
             BASE="$CRON_BASE_URL"
           elif [ -n "${CRON_ENDPOINT:-}" ]; then
             # Strip /api/... from the endpoint to get base
             BASE=$(echo "$CRON_ENDPOINT" | sed 's|/api/.*||')
-          else
-            BASE="$DEFAULT_DOMAIN"
           fi
           
           # Clean trailing slash

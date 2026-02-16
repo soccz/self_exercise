@@ -3,6 +3,7 @@ import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin"
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
 import { analyzePreMarket } from "@/lib/quant/coach";
+import { calculateCalories } from "@/lib/quant/engine";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +72,12 @@ function dateInTz(timeZone: string): string {
     return new Date().toLocaleDateString("en-CA", { timeZone });
 }
 
+function addDays(ymd: string, days: number): string {
+    const t = Date.parse(`${ymd}T00:00:00Z`);
+    const d = new Date(t + days * 24 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10);
+}
+
 export async function POST(req: Request) {
     const requestId = newRequestId();
 
@@ -96,7 +103,7 @@ export async function POST(req: Request) {
         // 3. User Check & Config
         const { data: user, error: userError } = await supabase
             .from("users")
-            .select("telegram_chat_id, telegram_remind_enabled, telegram_timezone, full_name")
+            .select("telegram_chat_id, telegram_remind_enabled, telegram_timezone, full_name, goal_mode, weight")
             .eq("id", SINGLE_PLAYER_ID)
             .single();
 
@@ -110,6 +117,7 @@ export async function POST(req: Request) {
         }
 
         const timeZone = user.telegram_timezone || "Asia/Seoul";
+        const goalMode = user.goal_mode === "muscle_gain" ? "muscle_gain" : "fat_loss";
         const today = dateInTz(timeZone);
 
         // 4. Check if already logged today?
@@ -124,35 +132,73 @@ export async function POST(req: Request) {
             return NextResponse.json({ requestId, ok: true, skipped: "already_logged" });
         }
 
-        // 5. Generate Briefing (Algo Analysis)
-        const briefing = await analyzePreMarket(supabase, SINGLE_PLAYER_ID);
+        // 5. Generate Briefing (mode-aware)
+        const safeName = escapeTelegramMarkdown(user.full_name ?? "Iron Quant");
+        const msg = await (async (): Promise<string | null> => {
+            if (goalMode === "fat_loss") {
+                const start = addDays(today, -6);
+                const { data: rows, error: wErr } = await supabase
+                    .from("workouts")
+                    .select("duration_minutes, average_rpe")
+                    .eq("user_id", SINGLE_PLAYER_ID)
+                    .gte("workout_date", start)
+                    .lte("workout_date", today);
 
-        if (!briefing) {
+                if (wErr) {
+                    console.error("cron briefing: fat mode workout query failed", wErr);
+                    return null;
+                }
+
+                const workouts = rows ?? [];
+                const minutes = workouts.reduce((acc, w) => acc + (Number(w.duration_minutes) || 0), 0);
+                const calories = workouts.reduce(
+                    (acc, w) => acc + calculateCalories(Number(user.weight) || 75, Number(w.duration_minutes) || 0, Number(w.average_rpe) || 6),
+                    0,
+                );
+                const remain = Math.max(0, 150 - Math.round(minutes));
+                const nextAction = remain > 0
+                    ? `오늘 *${Math.min(30, remain)}분*만 걸으면 주간 목표에 더 가까워집니다.`
+                    : "오늘은 20분 회복 유산소로 흐름만 유지하세요.";
+
+                return [
+                    `*🔔 Iron Quant 감량 브리핑*`,
+                    `기준: ${safeName}`,
+                    ``,
+                    `- 최근 7일 유산소: *${Math.round(minutes)}분* / 150분`,
+                    `- 최근 7일 추정 소모: *${Math.round(calories).toLocaleString()} kcal*`,
+                    ``,
+                    `💬 *오늘 액션*: ${nextAction}`,
+                ].join("\n");
+            }
+
+            const briefing = await analyzePreMarket(supabase, SINGLE_PLAYER_ID);
+            if (!briefing) return null;
+
+            const icon = briefing.trend === "Bullish" ? "📈" : briefing.trend === "Bearish" ? "📉" : "⚖";
+            return [
+                `*🔔 Iron Quant 근육 브리핑*`,
+                `기준: ${safeName}`,
+                ``,
+                `*${briefing.ticker} (Target)*`,
+                `${icon} 추세: *${briefing.trend}*`,
+                `종가: ${briefing.last_price}kg`,
+                `목표가: *${briefing.target_price}kg*`,
+                ``,
+                `💬 *Analyst Note*:`,
+                `${briefing.advice}`,
+            ].join("\n");
+        })();
+
+        if (!msg) {
             return NextResponse.json({ requestId, ok: true, skipped: "no_analysis_data" });
         }
-
-        // 6. Send Telegram Message
-        const icon = briefing.trend === "Bullish" ? "📈" : briefing.trend === "Bearish" ? "📉" : "⚖";
-        const safeName = escapeTelegramMarkdown(user.full_name ?? "Iron Quant");
-        const msg = [
-            `*🔔 Iron Quant 장전(Pre-Market) 브리핑*`,
-            `기준: ${safeName} 포트폴리오`,
-            ``,
-            `*${briefing.ticker} (Target)*`,
-            `${icon} 추세: *${briefing.trend}*`,
-            `종가: ${briefing.last_price}kg`,
-            `목표가: *${briefing.target_price}kg*`,
-            ``,
-            `💬 *Analyst Note*:`,
-            `${briefing.advice}`,
-        ].join("\n");
 
         const sent = await sendMessage(user.telegram_chat_id, msg);
         if (!sent) {
             return NextResponse.json({ requestId, ok: false, error: "Telegram send failed" }, { status: 502 });
         }
 
-        return NextResponse.json({ requestId, ok: true, sent: true, briefing });
+        return NextResponse.json({ requestId, ok: true, sent: true, mode: goalMode });
     } catch (e: unknown) {
         console.error("cron briefing: unhandled error", e);
         const msg = e instanceof Error ? e.message : String(e);

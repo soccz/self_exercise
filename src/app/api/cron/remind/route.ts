@@ -99,7 +99,7 @@ export async function POST(req: Request) {
     const { data: user, error: userError } = await supabase
       .from("users")
       .select(
-        "telegram_chat_id, telegram_remind_enabled, telegram_remind_time, telegram_timezone, telegram_last_reminded_date, full_name",
+        "telegram_chat_id, telegram_remind_enabled, telegram_remind_time, telegram_timezone, telegram_last_reminded_date, full_name, goal_mode",
       )
       .eq("id", SINGLE_PLAYER_ID)
       .single();
@@ -112,6 +112,7 @@ export async function POST(req: Request) {
     const time = (user?.telegram_remind_time ?? "21:00").trim();
     const timeZone = (user?.telegram_timezone ?? "Asia/Seoul").trim() || "Asia/Seoul";
     const name = escapeTelegramMarkdown(user?.full_name ?? "Iron Quant");
+    const goalMode = user?.goal_mode === "muscle_gain" ? "muscle_gain" : "fat_loss";
 
     if (!BOT_TOKEN) {
       return json(requestId, { requestId, ok: false, error: "TELEGRAM_BOT_TOKEN not set" }, { status: 500 });
@@ -154,10 +155,9 @@ export async function POST(req: Request) {
       return json(requestId, { requestId, ok: true, skipped: "already_logged", date: today });
     }
 
-    const sent = await sendMessage(
-      chatId,
-      `⏰ *${name}* 오늘 운동 기록이 없습니다.\n\n예: \`스쿼트 100 5 5\`\n또는 앱에서 기록 버튼을 눌러주세요.`,
-    );
+    const sent = await sendMessage(chatId, goalMode === "fat_loss"
+      ? `⏰ *${name}* 오늘 유산소 기록이 없습니다.\n\n예: \`러닝머신 30 1 1\`\n또는 앱에서 기록 버튼을 눌러주세요.`
+      : `⏰ *${name}* 오늘 운동 기록이 없습니다.\n\n예: \`스쿼트 100 5 5\`\n또는 앱에서 기록 버튼을 눌러주세요.`);
 
     if (!sent) {
       return json(requestId, { requestId, ok: false, error: "Telegram send failed" }, { status: 502 });

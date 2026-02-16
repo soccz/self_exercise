@@ -1,8 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase_database";
+import type { GoalMode } from "@/lib/data/types";
+import { calculateCalories } from "@/lib/quant/engine";
 
 type WorkoutRow = Database["public"]["Tables"]["workouts"]["Row"];
 type UserRow = Database["public"]["Tables"]["users"]["Row"];
+type BuildWeeklyOptions = {
+  goalMode?: GoalMode;
+  userWeight?: number;
+};
 
 function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number") return value;
@@ -96,6 +102,7 @@ export async function buildWeeklyTelegramReport(
   supabase: SupabaseClient<Database>,
   userId: string,
   timeZone: string,
+  options: BuildWeeklyOptions = {},
 ): Promise<{ text: string; meta: { start: string; end: string } }> {
   const end = dateInTz(timeZone);
   const start = addDays(end, -6);
@@ -113,7 +120,7 @@ export async function buildWeeklyTelegramReport(
       .order("workout_date", { ascending: true }),
     supabase
       .from("users")
-      .select("current_streak, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead")
+      .select("current_streak, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, goal_mode, weight")
       .eq("id", userId)
       .single(),
   ]);
@@ -131,10 +138,10 @@ export async function buildWeeklyTelegramReport(
     };
   }
 
-  const byDay: Record<string, { count: number; volume: number; rpeSum: number; rpeN: number; names: string[] }> = {};
-  for (const d of days) byDay[d] = { count: 0, volume: 0, rpeSum: 0, rpeN: 0, names: [] };
+  const byDay: Record<string, { count: number; volume: number; minutes: number; rpeSum: number; rpeN: number; names: string[] }> = {};
+  for (const d of days) byDay[d] = { count: 0, volume: 0, minutes: 0, rpeSum: 0, rpeN: 0, names: [] };
 
-  const all = (rows ?? []) as Pick<WorkoutRow, "workout_date" | "total_volume" | "average_rpe" | "logs" | "title">[];
+  const all = (rows ?? []) as Pick<WorkoutRow, "workout_date" | "total_volume" | "average_rpe" | "duration_minutes" | "logs" | "title">[];
   const curRows = all.filter((r) => (r.workout_date ?? "") >= start);
   const prevRows = all.filter((r) => (r.workout_date ?? "") < start);
 
@@ -144,6 +151,7 @@ export async function buildWeeklyTelegramReport(
     byDay[d].count += 1;
     const v = toNumber(r.total_volume, 0);
     byDay[d].volume += v;
+    byDay[d].minutes += toNumber(r.duration_minutes, 0);
     const rpe = toNumber(r.average_rpe, 0);
     if (rpe > 0) {
       byDay[d].rpeSum += rpe;
@@ -154,9 +162,17 @@ export async function buildWeeklyTelegramReport(
   }
 
   const volumes = days.map((d) => byDay[d]?.volume ?? 0);
+  const minutesByDay = days.map((d) => byDay[d]?.minutes ?? 0);
   const sessions = days.reduce((acc, d) => acc + (byDay[d]?.count ?? 0), 0);
   const activeDays = days.reduce((acc, d) => acc + ((byDay[d]?.count ?? 0) > 0 ? 1 : 0), 0);
   const totalVolume = volumes.reduce((a, b) => a + b, 0);
+  const totalMinutes = minutesByDay.reduce((a, b) => a + b, 0);
+  const userWeight = toNumber(options.userWeight ?? (user as Pick<UserRow, "weight"> | null)?.weight, 75);
+  const totalCalories = curRows.reduce(
+    (acc, r) => acc + calculateCalories(userWeight, toNumber(r.duration_minutes, 0), toNumber(r.average_rpe, 0)),
+    0,
+  );
+  const mode: GoalMode = options.goalMode ?? ((user as Pick<UserRow, "goal_mode"> | null)?.goal_mode === "muscle_gain" ? "muscle_gain" : "fat_loss");
   const avgRpeAll = (() => {
     const sum = days.reduce((acc, d) => acc + (byDay[d]?.rpeSum ?? 0), 0);
     const n = days.reduce((acc, d) => acc + (byDay[d]?.rpeN ?? 0), 0);
@@ -219,30 +235,55 @@ export async function buildWeeklyTelegramReport(
     .map(([k]) => k)
     .filter(Boolean);
 
-  const advice = (() => {
+  const muscleAdvice = (() => {
     if (activeDays === 0) return "이번 주 기록이 없습니다. 다음 주는 1회라도 기록하는 게 최우선입니다.";
     if (activeDays <= 2) return "거래일이 적습니다. 다음 주는 주 3회(분할/전신 아무거나)만 맞추면 급상승합니다.";
     if (avgRpeAll !== null && avgRpeAll >= 8.7) return "피로가 높습니다. 다음 주는 1일 휴식 또는 델로드(90%)를 섞으세요.";
     return "좋습니다. 다음 주는 가장 약한 섹터(상체/하체) 1개만 더 보강하세요.";
   })();
 
+  const fatAdvice = (() => {
+    if (activeDays === 0) return "이번 주 유산소 기록이 없습니다. 15~20분 걷기 1회부터 다시 시작하세요.";
+    if (totalMinutes < 90) return "유산소 시간이 부족합니다. 다음 주는 20~30분 세션을 3회 확보해 보세요.";
+    if (totalMinutes < 150) return `목표 150분까지 ${150 - Math.round(totalMinutes)}분 남았습니다. 짧은 걷기 2회만 추가하세요.`;
+    if (avgRpeAll !== null && avgRpeAll >= 8.7) return "강도가 높습니다. 다음 주 1~2회는 회복용 Zone2로 낮춰서 지속성을 지키세요.";
+    return "좋은 감량 페이스입니다. 현재 루틴을 유지하면서 수면/식단만 안정화하세요.";
+  })();
+
   const lines: string[] = [];
-  lines.push(`*📅 주간 리포트* (${start} ~ ${end})`);
-  lines.push("");
-  lines.push(`- 활동: *${activeDays}일* / 7일`);
-  lines.push(`- 세션: *${sessions}회*`);
-  lines.push(`- 총 볼륨: *${Math.round(totalVolume).toLocaleString()}kg*`);
-  if (avgRpeAll !== null) lines.push(`- 평균 RPE: *${avgRpeAll.toFixed(1)}*`);
-  lines.push(`- 볼륨 스파크: \`${sparkline(volumes)}\``);
-  if (ratio) lines.push(`- 상/하 비중(볼륨): 상체 ${ratio.u}% | 하체 ${ratio.l}%`);
-  lines.push(
-    `- Big3 최고(주간): S ${bestCur.squat} (${diffText(bestCur.squat, bestPrev.squat)}) | B ${bestCur.bench} (${diffText(bestCur.bench, bestPrev.bench)}) | D ${bestCur.dead} (${diffText(bestCur.dead, bestPrev.dead)})`,
-  );
-  lines.push(`- 현재 3대 1RM: Total ${total1} (S ${Math.round(squat1)}, B ${Math.round(bench1)}, D ${Math.round(dead1)})`);
-  lines.push(`- 스트릭: ${streak}일`);
-  if (top.length > 0) lines.push(`- Top: ${top.map((t) => `\`${t}\``).join(", ")}`);
-  lines.push("");
-  lines.push(`💬 *다음 액션*: ${advice}`);
+  if (mode === "fat_loss") {
+    const targetMinutes = 150;
+    const progress = Math.min(100, Math.round((totalMinutes / targetMinutes) * 100));
+    lines.push(`*📅 주간 감량 리포트* (${start} ~ ${end})`);
+    lines.push("");
+    lines.push(`- 활동: *${activeDays}일* / 7일`);
+    lines.push(`- 세션: *${sessions}회*`);
+    lines.push(`- 유산소 시간: *${Math.round(totalMinutes)}분* / ${targetMinutes}분 (${progress}%)`);
+    lines.push(`- 추정 소모 칼로리: *${Math.round(totalCalories).toLocaleString()} kcal*`);
+    if (avgRpeAll !== null) lines.push(`- 평균 RPE: *${avgRpeAll.toFixed(1)}*`);
+    lines.push(`- 시간 스파크: \`${sparkline(minutesByDay)}\``);
+    lines.push(`- 스트릭: ${streak}일`);
+    if (top.length > 0) lines.push(`- 주요 기록: ${top.map((t) => `\`${t}\``).join(", ")}`);
+    lines.push("");
+    lines.push(`💬 *다음 액션*: ${fatAdvice}`);
+  } else {
+    lines.push(`*📅 주간 리포트* (${start} ~ ${end})`);
+    lines.push("");
+    lines.push(`- 활동: *${activeDays}일* / 7일`);
+    lines.push(`- 세션: *${sessions}회*`);
+    lines.push(`- 총 볼륨: *${Math.round(totalVolume).toLocaleString()}kg*`);
+    if (avgRpeAll !== null) lines.push(`- 평균 RPE: *${avgRpeAll.toFixed(1)}*`);
+    lines.push(`- 볼륨 스파크: \`${sparkline(volumes)}\``);
+    if (ratio) lines.push(`- 상/하 비중(볼륨): 상체 ${ratio.u}% | 하체 ${ratio.l}%`);
+    lines.push(
+      `- Big3 최고(주간): S ${bestCur.squat} (${diffText(bestCur.squat, bestPrev.squat)}) | B ${bestCur.bench} (${diffText(bestCur.bench, bestPrev.bench)}) | D ${bestCur.dead} (${diffText(bestCur.dead, bestPrev.dead)})`,
+    );
+    lines.push(`- 현재 3대 1RM: Total ${total1} (S ${Math.round(squat1)}, B ${Math.round(bench1)}, D ${Math.round(dead1)})`);
+    lines.push(`- 스트릭: ${streak}일`);
+    if (top.length > 0) lines.push(`- Top: ${top.map((t) => `\`${t}\``).join(", ")}`);
+    lines.push("");
+    lines.push(`💬 *다음 액션*: ${muscleAdvice}`);
+  }
 
   return { text: lines.join("\n"), meta: { start, end } };
 }
