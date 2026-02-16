@@ -113,7 +113,7 @@ export async function buildWeeklyTelegramReport(
   const [{ data: rows, error }, { data: user, error: uErr }] = await Promise.all([
     supabase
       .from("workouts")
-      .select("workout_date, total_volume, average_rpe, logs, title")
+      .select("workout_date, total_volume, average_rpe, duration_minutes, logs, title")
       .eq("user_id", userId)
       .gte("workout_date", prevStart)
       .lte("workout_date", end)

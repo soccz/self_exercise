@@ -36,11 +36,16 @@ jobs:
             exit 1
           fi
 
-          if echo "$BASE_URL" | grep -Eq "/api/cron/monthly/?$"; then
-            URL="${BASE_URL%/}"
+          if [ -n "${CRON_BASE_URL:-}" ]; then
+            BASE="$CRON_BASE_URL"
+          elif [ -n "${CRON_ENDPOINT:-}" ]; then
+            BASE=$(echo "$CRON_ENDPOINT" | sed 's|/api/.*||')
           else
-            URL="${BASE_URL%/}/api/cron/monthly"
+            BASE="$CANONICAL_BASE_URL"
           fi
+
+          BASE="${BASE%/}"
+          URL="$BASE/api/cron/monthly"
 
           echo "POST $URL"
           HTTP_CODE="$(
