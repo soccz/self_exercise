@@ -7,7 +7,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const APP_URL = process.env.APP_URL || "https://self-exercise.vercel.app";
+const APP_BASE_URL = "https://self-exercise.vercel.app";
+const APP_VERSION = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || "live";
+const APP_URL = `${APP_BASE_URL}/?v=${APP_VERSION}`;
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

@@ -15,8 +15,9 @@ import { analyzeAdviceForGoal, normalizeGoalMode } from "@/lib/goal_mode";
 // Telegram Bot Token (from env)
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
-const APP_URL = process.env.APP_URL || "https://self-exercise.vercel.app";
+const APP_BASE_URL = "https://self-exercise.vercel.app";
 const BOT_BUILD = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || process.env.npm_package_version || "local";
+const APP_URL = `${APP_BASE_URL}/?v=${BOT_BUILD}`;
 
 // Hardcoded User ID for single-player mode
 const MY_ID = 'me';
@@ -316,6 +317,7 @@ export async function POST(req: NextRequest) {
             const report = [
                 "*Iron Quant Debug*",
                 `- build: \`${BOT_BUILD}\``,
+                `- app url: \`${APP_URL}\``,
                 `- Supabase ref: \`${ref}\``,
                 `- user: \`${user?.id ?? "none"}\` / \`${user?.full_name ?? "none"}\``,
                 `- workouts(me): \`${workoutsCount ?? 0}\``,
