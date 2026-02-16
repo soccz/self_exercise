@@ -5,7 +5,11 @@
 ## 1. Supabase 준비
 1. Supabase에서 프로젝트 생성
 2. `SQL Editor`에서 `supabase/schema.sql` 실행
-3. `Project Settings -> API`에서 아래 값 확인
+3. 기존 프로젝트 업그레이드면 아래 패치도 1회 실행
+- `supabase/telegram_reminder_patch.sql`
+- `supabase/goal_mode_patch.sql`
+- `supabase/health_personalization_patch.sql`
+4. `Project Settings -> API`에서 아래 값 확인
 - `Project URL`
 - `anon public key`
 - `service_role key` (server-only; Telegram webhook write용)
@@ -59,6 +63,7 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 - `/remind on`
 - (선택) `/remind time 21:00`
 - (선택) `/remind tz Asia/Seoul`
+- (선택) `/cond sleep 7 fatigue 4 stress 3 soreness 2 hr 58` 로 컨디션 기록
 
 3. GitHub Actions Secrets 추가
 - GitHub 레포 `Settings -> Secrets and variables -> Actions`

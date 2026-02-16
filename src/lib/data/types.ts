@@ -23,6 +23,13 @@ export interface ExerciseLog {
     reps: number;
     weight: number;
     rpe?: number;
+    duration_minutes?: number;
+    distance_km?: number;
+    speed_kph?: number;
+    incline_pct?: number;
+    avg_hr?: number;
+    estimated_calories?: number;
+    calorie_confidence?: "low" | "medium" | "high";
 }
 
 export interface Workout {
@@ -33,6 +40,11 @@ export interface Workout {
     total_volume: number;
     average_rpe: number;
     duration_minutes: number;
+    estimated_calories?: number;
+    cardio_distance_km?: number;
+    cardio_avg_speed_kph?: number;
+    cardio_avg_incline_pct?: number;
+    avg_heart_rate?: number;
     logs: ExerciseLog[];
     feedback?: string;
     mood?: string;

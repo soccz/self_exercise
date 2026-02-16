@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase_database";
 import type { GoalMode } from "@/lib/data/types";
-import { calculateCalories } from "@/lib/quant/engine";
+import { estimateWorkoutCalories } from "@/lib/quant/engine";
+import { consultCouncil } from "@/lib/quant/ensemble";
+import type { CouncilCondition, CouncilWorkout } from "@/lib/quant/types";
 
 type WorkoutRow = Database["public"]["Tables"]["workouts"]["Row"];
 type UserRow = Database["public"]["Tables"]["users"]["Row"];
@@ -110,10 +112,10 @@ export async function buildWeeklyTelegramReport(
 
   const prevStart = addDays(end, -13);
 
-  const [{ data: rows, error }, { data: user, error: uErr }] = await Promise.all([
+  const [{ data: rows, error }, { data: user, error: uErr }, { data: conditions, error: cErr }] = await Promise.all([
     supabase
       .from("workouts")
-      .select("workout_date, total_volume, average_rpe, duration_minutes, logs, title")
+      .select("workout_date, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, logs, title")
       .eq("user_id", userId)
       .gte("workout_date", prevStart)
       .lte("workout_date", end)
@@ -123,6 +125,13 @@ export async function buildWeeklyTelegramReport(
       .select("current_streak, estimated_1rm_squat, estimated_1rm_bench, estimated_1rm_dead, goal_mode, weight")
       .eq("id", userId)
       .single(),
+    supabase
+      .from("daily_conditions")
+      .select("condition_date, sleep_hours, fatigue_score, stress_score, soreness_score, resting_hr")
+      .eq("user_id", userId)
+      .gte("condition_date", prevStart)
+      .lte("condition_date", end)
+      .order("condition_date", { ascending: true }),
   ]);
 
   if (error) {
@@ -137,11 +146,14 @@ export async function buildWeeklyTelegramReport(
       meta: { start, end },
     };
   }
+  const safeConditions = cErr
+    ? (cErr.message.includes("daily_conditions") && cErr.message.includes("does not exist") ? [] : [])
+    : (conditions ?? []);
 
   const byDay: Record<string, { count: number; volume: number; minutes: number; rpeSum: number; rpeN: number; names: string[] }> = {};
   for (const d of days) byDay[d] = { count: 0, volume: 0, minutes: 0, rpeSum: 0, rpeN: 0, names: [] };
 
-  const all = (rows ?? []) as Pick<WorkoutRow, "workout_date" | "total_volume" | "average_rpe" | "duration_minutes" | "logs" | "title">[];
+  const all = (rows ?? []) as Pick<WorkoutRow, "workout_date" | "total_volume" | "average_rpe" | "duration_minutes" | "estimated_calories" | "cardio_distance_km" | "logs" | "title">[];
   const curRows = all.filter((r) => (r.workout_date ?? "") >= start);
   const prevRows = all.filter((r) => (r.workout_date ?? "") < start);
 
@@ -168,8 +180,11 @@ export async function buildWeeklyTelegramReport(
   const totalVolume = volumes.reduce((a, b) => a + b, 0);
   const totalMinutes = minutesByDay.reduce((a, b) => a + b, 0);
   const userWeight = toNumber(options.userWeight ?? (user as Pick<UserRow, "weight"> | null)?.weight, 75);
+  const totalDistance = curRows.reduce((acc, r) => acc + toNumber(r.cardio_distance_km, 0), 0);
   const totalCalories = curRows.reduce(
-    (acc, r) => acc + calculateCalories(userWeight, toNumber(r.duration_minutes, 0), toNumber(r.average_rpe, 0)),
+    (acc, r) => acc + (toNumber(r.estimated_calories, 0) > 0
+      ? toNumber(r.estimated_calories, 0)
+      : estimateWorkoutCalories(userWeight, toNumber(r.duration_minutes, 0), toNumber(r.average_rpe, 0), r.logs)),
     0,
   );
   const mode: GoalMode = options.goalMode ?? ((user as Pick<UserRow, "goal_mode"> | null)?.goal_mode === "muscle_gain" ? "muscle_gain" : "fat_loss");
@@ -235,6 +250,32 @@ export async function buildWeeklyTelegramReport(
     .map(([k]) => k)
     .filter(Boolean);
 
+  const council = consultCouncil({
+    now: new Date(`${end}T00:00:00Z`),
+    user: {
+      id: userId,
+      mode,
+      weight: userWeight,
+      current_streak: streak,
+    },
+    workouts: curRows.map((r) => ({
+      workout_date: r.workout_date ?? end,
+      total_volume: toNumber(r.total_volume, 0),
+      average_rpe: toNumber(r.average_rpe, 0),
+      duration_minutes: toNumber(r.duration_minutes, 0),
+      estimated_calories: toNumber(r.estimated_calories, 0),
+      cardio_distance_km: toNumber(r.cardio_distance_km, 0),
+    })) as CouncilWorkout[],
+    conditions: safeConditions.map((c) => ({
+      condition_date: c.condition_date,
+      sleep_hours: toNumber(c.sleep_hours, 0),
+      fatigue_score: c.fatigue_score ?? undefined,
+      stress_score: c.stress_score ?? undefined,
+      soreness_score: c.soreness_score ?? undefined,
+      resting_hr: c.resting_hr ?? undefined,
+    })) as CouncilCondition[],
+  });
+
   const muscleAdvice = (() => {
     if (activeDays === 0) return "이번 주 기록이 없습니다. 다음 주는 1회라도 기록하는 게 최우선입니다.";
     if (activeDays <= 2) return "거래일이 적습니다. 다음 주는 주 3회(분할/전신 아무거나)만 맞추면 급상승합니다.";
@@ -259,6 +300,7 @@ export async function buildWeeklyTelegramReport(
     lines.push(`- 활동: *${activeDays}일* / 7일`);
     lines.push(`- 세션: *${sessions}회*`);
     lines.push(`- 유산소 시간: *${Math.round(totalMinutes)}분* / ${targetMinutes}분 (${progress}%)`);
+    if (totalDistance > 0) lines.push(`- 이동거리: *${totalDistance.toFixed(1)}km*`);
     lines.push(`- 추정 소모 칼로리: *${Math.round(totalCalories).toLocaleString()} kcal*`);
     if (avgRpeAll !== null) lines.push(`- 평균 RPE: *${avgRpeAll.toFixed(1)}*`);
     lines.push(`- 시간 스파크: \`${sparkline(minutesByDay)}\``);
@@ -283,6 +325,15 @@ export async function buildWeeklyTelegramReport(
     if (top.length > 0) lines.push(`- Top: ${top.map((t) => `\`${t}\``).join(", ")}`);
     lines.push("");
     lines.push(`💬 *다음 액션*: ${muscleAdvice}`);
+  }
+
+  if (council.top.length > 0) {
+    lines.push("");
+    lines.push("*🧠 Council 합의*");
+    for (const advice of council.top.slice(0, 2)) {
+      const agent = advice.agent === "analyst" ? "Analyst" : advice.agent === "physio" ? "Physio" : "Psych";
+      lines.push(`- [${agent}] ${advice.headline}: ${advice.action}`);
+    }
   }
 
   return { text: lines.join("\n"), meta: { start, end } };

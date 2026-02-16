@@ -29,12 +29,19 @@ npm install
 npm run dev
 ```
 
+검증 명령:
+```bash
+npm run lint
+npm run typecheck
+npm run test:ensemble
+```
+
 ## 모드 한눈에 보기
 | 항목 | 감량 모드 (`fat_loss`) | 근육 모드 (`muscle_gain`) |
 |---|---|---|
 | 홈 핵심 카드 | 주간 유산소 목표 진행률, 칼로리 | 3대 1RM, 자산 지표 |
 | 추천 방향 | 유산소 시간/회복 중심 | 중량/볼륨 중심 |
-| 기록 템플릿 예시 | `러닝머신 30 1 1` | `스쿼트 100 5 5` |
+| 기록 템플릿 예시 | `러닝머신 30 8 1` | `스쿼트 100 5 5` |
 
 ## 기록 입력 예시
 ### 근육 모드
@@ -46,9 +53,9 @@ npm run dev
 
 ### 감량 모드
 ```text
-러닝머신 30 1 1
-빠르게걷기 25 1 1
-사이클 35 1 1
+러닝머신 30 8 1
+러닝머신 30분 8km/h 경사 1
+사이클 35분 20km/h
 ```
 
 ## 웹 사용법
@@ -84,6 +91,7 @@ npm run dev
 | `/status` 또는 `자산` | 현재 상태 리포트 |
 | `/rec` 또는 `추천` | 오늘 추천 |
 | `/mode fat\|muscle` 또는 `mode fat\|muscle` | 모드 전환 |
+| `/cond sleep 7 fatigue 4 stress 3 soreness 2 hr 58` | 오늘 컨디션 입력 |
 | `/last` | 마지막 운동 조회 |
 | `/edit ...` | 마지막 운동 수정 |
 | `/undo` 또는 `/undo!` | 마지막 운동 삭제 |

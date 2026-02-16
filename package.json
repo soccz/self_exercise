@@ -7,7 +7,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:ensemble": "ts-node --compiler-options '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' src/lib/quant/ensemble.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3",

@@ -56,13 +56,45 @@ CREATE TABLE IF NOT EXISTS public.workouts (
     title TEXT,                  
     total_volume NUMERIC,        
     average_rpe NUMERIC,         
-    duration_minutes INTEGER,    
+    duration_minutes INTEGER,
+    estimated_calories NUMERIC,
+    cardio_distance_km NUMERIC,
+    cardio_avg_speed_kph NUMERIC,
+    cardio_avg_incline_pct NUMERIC,
+    avg_heart_rate INTEGER,
     
     logs JSONB,                  
     
     feedback TEXT,               
     mood TEXT,                   
     
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 4. Daily conditions (sleep/fatigue/stress for personalization)
+CREATE TABLE IF NOT EXISTS public.daily_conditions (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id TEXT REFERENCES public.users(id) ON DELETE CASCADE,
+    condition_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    sleep_hours NUMERIC(4,2),
+    fatigue_score INTEGER CHECK (fatigue_score BETWEEN 1 AND 10),
+    stress_score INTEGER CHECK (stress_score BETWEEN 1 AND 10),
+    soreness_score INTEGER CHECK (soreness_score BETWEEN 1 AND 10),
+    resting_hr INTEGER,
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE(user_id, condition_date)
+);
+
+-- 5. Advice logs (for audit and tuning)
+CREATE TABLE IF NOT EXISTS public.advice_logs (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id TEXT REFERENCES public.users(id) ON DELETE CASCADE,
+    event_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    source TEXT NOT NULL, -- briefing, weekly_report, manual
+    mode TEXT,
+    advice_json JSONB NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 

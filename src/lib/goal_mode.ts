@@ -49,6 +49,8 @@ function analyzeFatLoss(workouts: Workout[]): AssetAdvice[] {
   });
 
   const weeklyMinutes = weeklyRows.reduce((acc, w) => acc + (w.duration_minutes || 0), 0);
+  const weeklyDistance = weeklyRows.reduce((acc, w) => acc + (w.cardio_distance_km || 0), 0);
+  const weeklyCalories = weeklyRows.reduce((acc, w) => acc + (w.estimated_calories || 0), 0);
   const remain = Math.max(0, 150 - weeklyMinutes);
   if (remain > 0) {
     advice.push({
@@ -56,6 +58,24 @@ function analyzeFatLoss(workouts: Workout[]): AssetAdvice[] {
       message: `이번 주 유산소 시간이 부족합니다. ${remain}분만 더 채우면 감량 페이스가 안정됩니다.`,
       priority: 4,
       recommendedWorkout: "빠르게 걷기 30분",
+    });
+  }
+
+  if (weeklyMinutes >= 90 && weeklyDistance < 10) {
+    advice.push({
+      type: "Buy",
+      message: `유산소 시간 대비 이동거리가 낮습니다(${weeklyDistance.toFixed(1)}km). 속도/경사 중 하나를 소폭 올려 효율을 높이세요.`,
+      priority: 4,
+      recommendedWorkout: "러닝머신 25~30분 (속도 또는 경사 +1)",
+    });
+  }
+
+  if (weeklyMinutes >= 120 && weeklyCalories > 0 && weeklyCalories < 1000) {
+    advice.push({
+      type: "Buy",
+      message: `추정 소모 칼로리가 낮습니다(${Math.round(weeklyCalories)}kcal). Zone2 기반으로 10~15분 추가 세션을 붙여보세요.`,
+      priority: 3,
+      recommendedWorkout: "빠르게 걷기 15분 추가",
     });
   }
 
@@ -77,7 +97,7 @@ function analyzeFatLoss(workouts: Workout[]): AssetAdvice[] {
   if (advice.length === 0) {
     advice.push({
       type: "Hold",
-      message: "좋은 흐름입니다. 오늘은 Zone2 유산소 25~35분으로 페이스를 유지하세요.",
+      message: `좋은 흐름입니다. 최근 7일 ${Math.round(weeklyMinutes)}분 / ${weeklyDistance.toFixed(1)}km를 유지 중입니다.`,
       priority: 2,
       recommendedWorkout: "Zone2 유산소 30분",
     });
@@ -90,6 +110,5 @@ export function modeRecordTemplates(mode: GoalMode): string[] {
   if (mode === "muscle_gain") {
     return ["스쿼트 100 5 5", "벤치 60x10x5", "데드 120 5 5"];
   }
-  return ["러닝머신 30 1 1", "빠르게걷기 25 1 1", "사이클 35 1 1"];
+  return ["러닝머신 30 8 1", "러닝머신 30분 8km/h 경사1", "사이클 35분 20km/h"];
 }
-

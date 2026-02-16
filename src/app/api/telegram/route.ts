@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { parseWorkoutText } from '@/lib/quant/engine';
+import { estimateWorkoutCalories, parseWorkoutText, summarizeCardioFromLogs } from '@/lib/quant/engine';
 import { analyzeMarketCondition } from '@/lib/quant/coach';
 import { getMarketPosition, getGhostReplay } from '@/lib/quant/market';
 import { buildWeeklyTelegramReport } from "@/lib/reports/weekly";
@@ -11,6 +11,8 @@ import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
 import { applyBig3Prs, estimateBig3FromLogs, recomputeBig3Prs } from "@/lib/server/prs";
 import { analyzeAdviceForGoal, normalizeGoalMode } from "@/lib/goal_mode";
+import { consultCouncil } from "@/lib/quant/ensemble";
+import type { CouncilCondition, CouncilWorkout } from "@/lib/quant/types";
 
 // Telegram Bot Token (from env)
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -83,6 +85,11 @@ function mapWorkoutRow(row: WorkoutRow): Workout {
         total_volume: toNumber(row.total_volume),
         average_rpe: toNumber(row.average_rpe),
         duration_minutes: row.duration_minutes ?? 0,
+        estimated_calories: toNumber((row as Record<string, unknown>)["estimated_calories"], 0),
+        cardio_distance_km: toNumber((row as Record<string, unknown>)["cardio_distance_km"], 0),
+        cardio_avg_speed_kph: toNumber((row as Record<string, unknown>)["cardio_avg_speed_kph"], 0),
+        cardio_avg_incline_pct: toNumber((row as Record<string, unknown>)["cardio_avg_incline_pct"], 0),
+        avg_heart_rate: toNumber((row as Record<string, unknown>)["avg_heart_rate"], 0),
         logs: parseExerciseLogs(row.logs),
         feedback: row.feedback ?? undefined,
         mood: row.mood ?? undefined,
@@ -140,7 +147,7 @@ async function sendMessage(chatId: string, text: string, showButton: boolean = f
             resize_keyboard: true,
             is_persistent: true,
             one_time_keyboard: false,
-            input_field_placeholder: goalMode === "fat_loss" ? "예: 러닝머신 30 1 1" : "예: 스쿼트 100 5 5",
+            input_field_placeholder: goalMode === "fat_loss" ? "예: 러닝머신 30 8 1" : "예: 스쿼트 100 5 5",
         },
     };
 
@@ -181,7 +188,9 @@ function helpText(): string {
         "",
         "*기록하기*",
         "- `스쿼트 100 5 5` (종목 무게 횟수 세트)",
-        "- `러닝머신 30 1 1` (유산소/시간 기록용)",
+        "- `러닝머신 30 8 1` (시간 속도 경사)",
+        "- `러닝머신 30분 8km/h 경사 1`",
+        "- `사이클 35분 20km/h`",
         "",
         "*명령어*",
         "- `/status` 또는 `자산`: 자산 리포트",
@@ -195,6 +204,7 @@ function helpText(): string {
         "- `/week` 또는 `주간`: 주간 리포트",
         "- `/month` 또는 `월간`: 월간 리포트(지난달)",
         "- `/recompute`: 1RM(3대) 재계산",
+        "- `/cond sleep 7 fatigue 4 stress 3`: 오늘 컨디션 기록",
         "- `/remind`: 리마인더 설정(상태/ON/OFF/시간/타임존)",
         "- `/remind test`: 리마인더 테스트(즉시 1회)",
         "- `/debug`: 연결 상태 점검",
@@ -258,10 +268,12 @@ export async function POST(req: NextRequest) {
 
         const { data: profile } = await supabaseAdmin
             .from("users")
-            .select("goal_mode")
+            .select("goal_mode, weight, current_streak")
             .eq("id", MY_ID)
             .single();
         const goalMode = normalizeGoalMode(profile?.goal_mode);
+        const profileWeight = toNumber(profile?.weight, 75);
+        const profileStreak = Math.max(0, Math.round(toNumber(profile?.current_streak, 0)));
         const send = async (msg: string, showButton = false) => sendMessage(chatId, msg, showButton, goalMode);
 
         if (text === "오늘 추천") text = "/rec";
@@ -288,7 +300,7 @@ export async function POST(req: NextRequest) {
         }
         if (text === "기록" || text === "유산소 기록") {
             if (goalMode === "fat_loss") {
-                await send("기록 예시:\n- `러닝머신 30 1 1`\n- `빠르게걷기 25 1 1`\n- `사이클 35 1 1`");
+                await send("기록 예시:\n- `러닝머신 30 8 1`\n- `러닝머신 30분 8km/h 경사 1`\n- `사이클 35분 20km/h`");
             } else {
                 await send("기록 예시:\n- `스쿼트 100 5 5`\n- `벤치 60x10x5 @9`\n- `데드 120 5 5`");
             }
@@ -431,6 +443,91 @@ export async function POST(req: NextRequest) {
             return json({ ok: true });
         }
 
+        // Daily condition record: /cond sleep 7 fatigue 4 stress 3 soreness 2 hr 58
+        if (text === "/cond" || text.startsWith("/cond ")) {
+            const arg = text.replace(/^\/cond\s*/, "").trim();
+            const today = new Date().toISOString().slice(0, 10);
+
+            if (!arg) {
+                const { data, error } = await supabaseAdmin
+                    .from("daily_conditions")
+                    .select("condition_date, sleep_hours, fatigue_score, stress_score, soreness_score, resting_hr")
+                    .eq("user_id", MY_ID)
+                    .eq("condition_date", today)
+                    .single();
+                if (error) {
+                    await send(`❌ 조회 실패: ${error.message}\n(먼저 supabase/health_personalization_patch.sql 실행 필요)`);
+                    return json({ ok: true });
+                }
+                await send(
+                    [
+                        "*오늘 컨디션*",
+                        `- date: \`${data?.condition_date ?? today}\``,
+                        `- sleep: \`${data?.sleep_hours ?? "-"}h\``,
+                        `- fatigue: \`${data?.fatigue_score ?? "-"}/10\``,
+                        `- stress: \`${data?.stress_score ?? "-"}/10\``,
+                        `- soreness: \`${data?.soreness_score ?? "-"}/10\``,
+                        `- hr: \`${data?.resting_hr ?? "-"}\``,
+                        "",
+                        "입력 예시: `/cond sleep 7 fatigue 4 stress 3 soreness 2 hr 58`",
+                    ].join("\n"),
+                    true,
+                );
+                return json({ ok: true });
+            }
+
+            const getValue = (patterns: RegExp[]): number | null => {
+                for (const p of patterns) {
+                    const m = arg.match(p);
+                    if (!m) continue;
+                    const v = Number(m[1]);
+                    if (Number.isFinite(v)) return v;
+                }
+                return null;
+            };
+
+            const sleep = getValue([/(?:sleep|수면)\s*([0-9]+(?:\.[0-9]+)?)/i]);
+            const fatigue = getValue([/(?:fatigue|피로)\s*([0-9]{1,2})/i]);
+            const stress = getValue([/(?:stress|스트레스)\s*([0-9]{1,2})/i]);
+            const soreness = getValue([/(?:soreness|근육통|통증)\s*([0-9]{1,2})/i]);
+            const hr = getValue([/(?:hr|resting|심박)\s*([0-9]{2,3})/i]);
+
+            if ([sleep, fatigue, stress, soreness, hr].every((v) => v === null)) {
+                await send("사용법: `/cond sleep 7 fatigue 4 stress 3 soreness 2 hr 58`");
+                return json({ ok: true });
+            }
+
+            const payload: Record<string, unknown> = {
+                user_id: MY_ID,
+                condition_date: today,
+            };
+            if (sleep !== null) payload.sleep_hours = sleep;
+            if (fatigue !== null) payload.fatigue_score = Math.max(1, Math.min(10, Math.round(fatigue)));
+            if (stress !== null) payload.stress_score = Math.max(1, Math.min(10, Math.round(stress)));
+            if (soreness !== null) payload.soreness_score = Math.max(1, Math.min(10, Math.round(soreness)));
+            if (hr !== null) payload.resting_hr = Math.max(30, Math.min(220, Math.round(hr)));
+
+            const { error } = await supabaseAdmin
+                .from("daily_conditions")
+                .upsert(payload, { onConflict: "user_id,condition_date" });
+            if (error) {
+                await send(`❌ 저장 실패: ${error.message}\n(먼저 supabase/health_personalization_patch.sql 실행 필요)`);
+            } else {
+                await send(
+                    [
+                        "✅ 컨디션 저장 완료",
+                        sleep !== null ? `- sleep: ${sleep}h` : null,
+                        fatigue !== null ? `- fatigue: ${Math.round(fatigue)}/10` : null,
+                        stress !== null ? `- stress: ${Math.round(stress)}/10` : null,
+                        soreness !== null ? `- soreness: ${Math.round(soreness)}/10` : null,
+                        hr !== null ? `- hr: ${Math.round(hr)}` : null,
+                    ].filter(Boolean).join("\n"),
+                    true,
+                );
+            }
+            return json({ ok: true });
+        }
+
         // 0. Command: /mode fat|muscle (robust parser: /mode, mode, 모드)
         const modeTokens = text.replace(/\s+/g, " ").trim().split(" ");
         const modeHead = (modeTokens[0] ?? "").toLowerCase();
@@ -544,7 +641,7 @@ export async function POST(req: NextRequest) {
                 .single();
             const { data: workoutRows, error: workoutsError } = await supabaseAdmin
                 .from('workouts')
-                .select('id, user_id, routine_id, workout_date, title, total_volume, average_rpe, duration_minutes, logs, feedback, mood, created_at')
+                .select('id, user_id, routine_id, workout_date, title, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, cardio_avg_speed_kph, cardio_avg_incline_pct, avg_heart_rate, logs, feedback, mood, created_at')
                 .eq('user_id', MY_ID)
                 .order('workout_date', { ascending: false })
                 .limit(200);
@@ -568,11 +665,12 @@ export async function POST(req: NextRequest) {
                         return Number.isFinite(t) && Date.now() - t <= weekMs;
                     });
                     const weekMinutes = week.reduce((acc, w) => acc + (w.duration_minutes || 0), 0);
-                    const weekCalories = week.reduce((acc, w) => {
-                        const rpe = Number.isFinite(w.average_rpe) ? w.average_rpe : 6;
-                        const mets = rpe >= 8 ? 6 : rpe >= 6 ? 5 : rpe >= 4 ? 4 : 3;
-                        return acc + Math.round(mets * (Number(user.weight) || 75) * ((w.duration_minutes || 0) / 60));
-                    }, 0);
+                    const weekDistance = week.reduce((acc, w) => acc + (w.cardio_distance_km || 0), 0);
+                    const weekCalories = week.reduce((acc, w) => (
+                        acc + (w.estimated_calories && w.estimated_calories > 0
+                            ? w.estimated_calories
+                            : estimateWorkoutCalories(Number(user.weight) || 75, w.duration_minutes || 0, w.average_rpe || 6, w.logs))
+                    ), 0);
                     const progress = Math.min(100, Math.round((weekMinutes / 150) * 100));
                     return [
                         "📊 *Iron Quant 감량 리포트*",
@@ -580,6 +678,7 @@ export async function POST(req: NextRequest) {
                         `🎯 모드: *감량*`,
                         `⚖ 체중: *${user.weight ?? 0}kg*`,
                         `⏱ 최근 7일 유산소: *${weekMinutes}분* (목표 150분, ${progress}%)`,
+                        `📏 최근 7일 이동거리: *${weekDistance.toFixed(1)}km*`,
                         `🔥 최근 7일 추정 소모: *${Math.round(weekCalories).toLocaleString()} kcal*`,
                         "",
                         `📢 오늘 액션`,
@@ -615,18 +714,75 @@ export async function POST(req: NextRequest) {
         if (text === '/rec' || text === '추천') {
             const { data: workoutRows, error: workoutsError } = await supabaseAdmin
                 .from('workouts')
-                .select('id, user_id, routine_id, workout_date, title, total_volume, average_rpe, duration_minutes, logs, feedback, mood, created_at')
+                .select('id, user_id, routine_id, workout_date, title, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, cardio_avg_speed_kph, cardio_avg_incline_pct, avg_heart_rate, logs, feedback, mood, created_at')
                 .eq('user_id', MY_ID)
                 .order('workout_date', { ascending: false })
                 .limit(10);
             if (workoutsError) console.error("Supabase workouts select error:", workoutsError);
             const workouts = (workoutRows ?? []).map(mapWorkoutRow);
             const advice = analyzeAdviceForGoal(goalMode, workouts);
+            const topPick = advice.find((a) => a.type === "Buy");
+
+            const { data: conditionRows, error: conditionError } = await supabaseAdmin
+                .from("daily_conditions")
+                .select("condition_date, sleep_hours, fatigue_score, stress_score, soreness_score, resting_hr")
+                .eq("user_id", MY_ID)
+                .order("condition_date", { ascending: false })
+                .limit(14);
+            if (conditionError && !conditionError.message.includes("daily_conditions")) {
+                console.error("Supabase daily_conditions select error:", conditionError);
+            }
+
+            const council = consultCouncil({
+                now: new Date(),
+                user: {
+                    id: MY_ID,
+                    mode: goalMode,
+                    weight: profileWeight,
+                    current_streak: profileStreak,
+                },
+                workouts: workouts.map((w) => ({
+                    workout_date: w.workout_date,
+                    total_volume: w.total_volume,
+                    average_rpe: w.average_rpe,
+                    duration_minutes: w.duration_minutes,
+                    estimated_calories: w.estimated_calories,
+                    cardio_distance_km: w.cardio_distance_km,
+                })) as CouncilWorkout[],
+                conditions: (conditionRows ?? []).map((c) => ({
+                    condition_date: c.condition_date,
+                    sleep_hours: toNumber(c.sleep_hours, 0) || undefined,
+                    fatigue_score: c.fatigue_score ?? undefined,
+                    stress_score: c.stress_score ?? undefined,
+                    soreness_score: c.soreness_score ?? undefined,
+                    resting_hr: c.resting_hr ?? undefined,
+                })) as CouncilCondition[],
+            });
+
+            if (council.primary) {
+                const agent = council.primary.agent === "analyst" ? "Analyst" : council.primary.agent === "physio" ? "Physio" : "Psych";
+                const title = goalMode === "fat_loss" ? "🧠 *감량 Council 추천*" : "🧠 *근육 Council 추천*";
+                const lines = [
+                    title,
+                    "",
+                    `*[${agent}]* ${council.primary.headline}`,
+                    council.primary.action,
+                    council.primary.reason[0] ? `근거: ${council.primary.reason[0]}` : null,
+                    topPick?.recommendedWorkout ? `추천 세션: ${topPick.recommendedWorkout}` : null,
+                    "",
+                    "*추가 의견*",
+                    ...council.top.slice(0, 3).map((a) => {
+                        const label = a.agent === "analyst" ? "Analyst" : a.agent === "physio" ? "Physio" : "Psych";
+                        return `- [${label}] ${a.headline}`;
+                    }),
+                ].filter(Boolean).join("\n");
+                await send(lines, true);
+                return json({ ok: true });
+            }
 
             if (advice.length === 0) {
                 await send("데이터가 부족하여 추천할 수 없습니다. 운동을 기록해주세요!", true);
             } else {
-                const topPick = advice.find(a => a.type === 'Buy');
                 if (topPick) {
                     const title = goalMode === "fat_loss" ? "🔥 *오늘 감량 추천*" : "🚀 *강력 매수 추천*";
                     await send(`${title}\n\n${topPick.message}\n추천: ${topPick.recommendedWorkout ?? "자유 운동"}`, true);
@@ -834,7 +990,7 @@ export async function POST(req: NextRequest) {
                     .single(),
                 supabaseAdmin
                     .from("workouts")
-                    .select("id, workout_date, title, total_volume, average_rpe, duration_minutes, logs, feedback, mood, created_at")
+                    .select("id, workout_date, title, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, cardio_avg_speed_kph, cardio_avg_incline_pct, avg_heart_rate, logs, feedback, mood, created_at")
                     .eq("user_id", MY_ID)
                     .order("workout_date", { ascending: false }),
             ]);
@@ -862,7 +1018,7 @@ export async function POST(req: NextRequest) {
                 if (/[",\n]/.test(s)) return `"${s.replace(/"/g, "\"\"")}"`;
                 return s;
             };
-            lines.push(["id", "workout_date", "title", "total_volume", "average_rpe", "duration_minutes", "mood", "feedback", "created_at", "logs_json"].join(","));
+            lines.push(["id", "workout_date", "title", "total_volume", "average_rpe", "duration_minutes", "estimated_calories", "cardio_distance_km", "cardio_avg_speed_kph", "cardio_avg_incline_pct", "avg_heart_rate", "mood", "feedback", "created_at", "logs_json"].join(","));
             for (const w of workouts ?? []) {
                 lines.push([
                     csvEscape(w.id),
@@ -871,6 +1027,11 @@ export async function POST(req: NextRequest) {
                     csvEscape(w.total_volume),
                     csvEscape(w.average_rpe),
                     csvEscape(w.duration_minutes),
+                    csvEscape((w as Record<string, unknown>).estimated_calories),
+                    csvEscape((w as Record<string, unknown>).cardio_distance_km),
+                    csvEscape((w as Record<string, unknown>).cardio_avg_speed_kph),
+                    csvEscape((w as Record<string, unknown>).cardio_avg_incline_pct),
+                    csvEscape((w as Record<string, unknown>).avg_heart_rate),
                     csvEscape(w.mood ?? ""),
                     csvEscape(w.feedback ?? ""),
                     csvEscape(w.created_at ?? ""),
@@ -892,7 +1053,7 @@ export async function POST(req: NextRequest) {
             ? weightRaw
             : typeof weightRaw === "string"
                 ? Number(weightRaw) || 75
-                : 75;
+                : profileWeight;
 
         const parseLines = (raw: string): { ok: true; logs: ReturnType<typeof parseWorkoutText>[] } | { ok: false; bad: string[] } => {
             const rawLines = raw
@@ -922,11 +1083,11 @@ export async function POST(req: NextRequest) {
         if (!parsedLines.ok) {
             const examples = goalMode === "fat_loss"
                 ? [
-                    "- `러닝머신 30 1 1`",
-                    "- `빠르게걷기 25 1 1`",
+                    "- `러닝머신 30 8 1`",
+                    "- `러닝머신 30분 8km/h 경사 1`",
                     "- 여러 종목은 줄바꿈으로 입력:",
-                    "  `러닝머신 20 1 1`",
-                    "  `사이클 20 1 1`",
+                    "  `러닝머신 20 7.5 1`",
+                    "  `사이클 20분 18km/h`",
                 ]
                 : [
                     "- `스쿼트 100 5 5`",
@@ -957,6 +1118,13 @@ export async function POST(req: NextRequest) {
                 reps: l!.reps,
                 sets: l!.sets,
                 rpe: l!.rpe,
+                duration_minutes: l!.estimatedDuration,
+                distance_km: l!.distance_km,
+                speed_kph: l!.speed_kph,
+                incline_pct: l!.incline_pct,
+                avg_hr: l!.avg_hr,
+                estimated_calories: l!.estimatedCalories,
+                calorie_confidence: l!.calorie_confidence,
             }));
 
             const logsJson: Json = logs.map((l) => {
@@ -967,6 +1135,13 @@ export async function POST(req: NextRequest) {
                     sets: l.sets,
                 };
                 if (l.rpe !== undefined) obj.rpe = l.rpe;
+                if (l.duration_minutes !== undefined) obj.duration_minutes = l.duration_minutes;
+                if (l.distance_km !== undefined) obj.distance_km = l.distance_km;
+                if (l.speed_kph !== undefined) obj.speed_kph = l.speed_kph;
+                if (l.incline_pct !== undefined) obj.incline_pct = l.incline_pct;
+                if (l.avg_hr !== undefined) obj.avg_hr = l.avg_hr;
+                if (l.estimated_calories !== undefined) obj.estimated_calories = l.estimated_calories;
+                if (l.calorie_confidence !== undefined) obj.calorie_confidence = l.calorie_confidence;
                 return obj;
             });
 
@@ -976,6 +1151,8 @@ export async function POST(req: NextRequest) {
                 : `Telegram batch (${logs.length})`;
             const totalVolume = logs.reduce((acc, l) => acc + (l.weight * l.reps * l.sets), 0);
             const duration = parsedLogs.reduce((acc, l) => acc + (l?.estimatedDuration ?? 0), 0);
+            const estimatedCalories = parsedLogs.reduce((acc, l) => acc + (l?.estimatedCalories ?? 0), 0);
+            const cardio = summarizeCardioFromLogs(logsJson, duration);
             const avgRpe = (() => {
                 const rpes = logs.map((l) => (typeof l.rpe === "number" && Number.isFinite(l.rpe) ? l.rpe : 8));
                 const sum = rpes.reduce((a, b) => a + b, 0);
@@ -989,6 +1166,11 @@ export async function POST(req: NextRequest) {
                 logs: logsJson,
                 total_volume: totalVolume,
                 duration_minutes: duration || undefined,
+                estimated_calories: estimatedCalories || undefined,
+                cardio_distance_km: cardio.distanceKm || undefined,
+                cardio_avg_speed_kph: cardio.avgSpeedKph || undefined,
+                cardio_avg_incline_pct: cardio.avgInclinePct || undefined,
+                avg_heart_rate: cardio.avgHr ? Math.round(cardio.avgHr) : undefined,
                 average_rpe: avgRpe,
                 mood: 'Good'
             });
@@ -1021,8 +1203,11 @@ export async function POST(req: NextRequest) {
                     "",
                     `총 볼륨: ${Math.round(totalVolume).toLocaleString()}kg`,
                     `평균 RPE: ${avgRpe.toFixed(1)}`,
+                    `추정 칼로리: ${Math.round(estimatedCalories).toLocaleString()} kcal`,
+                    cardio.distanceKm > 0 ? `이동거리: ${cardio.distanceKm.toFixed(2)}km` : null,
+                    cardio.avgSpeedKph > 0 ? `평균속도: ${cardio.avgSpeedKph.toFixed(2)} km/h` : null,
                     "자산 가치(1RM)에 반영되었습니다.",
-                ].join("\n");
+                ].filter(Boolean).join("\n");
 
                 // Circuit Breaker Warning
                 if (overheated?.message) msg += `\n\n${overheated.message}`;
@@ -1067,7 +1252,7 @@ export async function POST(req: NextRequest) {
                         "입력을 해석하지 못했습니다.",
                         "",
                         "예시:",
-                        "- `러닝머신 30 1 1`",
+                        "- `러닝머신 30 8 1`",
                         "- `스쿼트 100 5 5`",
                         "- `mode fat`",
                     ].join("\n"),

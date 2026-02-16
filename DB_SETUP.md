@@ -10,7 +10,7 @@
 ## 2. Execute SQL
 1. 좌측 메뉴 `SQL Editor` 클릭.
 2. `exercise_app/real/supabase/schema.sql` 파일의 내용을 복사해서 붙여넣기.
-3. `Run` 버튼 클릭. (테이블 3개 생성됨)
+3. `Run` 버튼 클릭. (핵심 테이블 생성)
 
 ## 2.5. (선택) 텔레그램 리마인더 컬럼 추가
 리마인더 기능을 쓰려면 Supabase에 컬럼을 한 번 추가해야 합니다.
@@ -23,6 +23,11 @@
 감량/근육 모드 전환 기능을 쓰려면 아래 패치를 1회 실행하세요.
 
 1. SQL Editor에서 `supabase/goal_mode_patch.sql` 실행
+
+## 2.7. (권장) 건강 개인화/앙상블 패치
+유산소 상세 지표(거리/속도/경사/칼로리), 컨디션 기록(`/cond`), Council 로그를 쓰려면 아래 패치를 1회 실행하세요.
+
+1. SQL Editor에서 `supabase/health_personalization_patch.sql` 실행
 
 ## 3. Connect to App
 1. 좌측 메뉴 `Project Settings` (톱니바퀴) → `API`.

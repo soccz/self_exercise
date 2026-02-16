@@ -93,6 +93,11 @@ export class SupabaseDataProvider implements DataProvider {
                     total_volume: toNumber(raw["total_volume"]),
                     average_rpe: toNumber(raw["average_rpe"]),
                     duration_minutes: toNumber(raw["duration_minutes"]),
+                    estimated_calories: toNumber(raw["estimated_calories"]),
+                    cardio_distance_km: toNumber(raw["cardio_distance_km"]),
+                    cardio_avg_speed_kph: toNumber(raw["cardio_avg_speed_kph"]),
+                    cardio_avg_incline_pct: toNumber(raw["cardio_avg_incline_pct"]),
+                    avg_heart_rate: toNumber(raw["avg_heart_rate"]),
                     logs: raw["logs"] ?? [],
                 })) as Workout[];
         } catch {
@@ -120,6 +125,11 @@ export class SupabaseDataProvider implements DataProvider {
                 total_volume: toNumber(raw["total_volume"]),
                 average_rpe: toNumber(raw["average_rpe"]),
                 duration_minutes: toNumber(raw["duration_minutes"]),
+                estimated_calories: toNumber(raw["estimated_calories"]),
+                cardio_distance_km: toNumber(raw["cardio_distance_km"]),
+                cardio_avg_speed_kph: toNumber(raw["cardio_avg_speed_kph"]),
+                cardio_avg_incline_pct: toNumber(raw["cardio_avg_incline_pct"]),
+                avg_heart_rate: toNumber(raw["avg_heart_rate"]),
                 logs: raw["logs"] ?? [],
             })) as Workout[];
     }

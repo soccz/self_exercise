@@ -173,6 +173,11 @@ export interface ParsedWorkout {
     reps: number;
     sets: number;
     rpe?: number;
+    distance_km?: number;
+    speed_kph?: number;
+    incline_pct?: number;
+    avg_hr?: number;
+    calorie_confidence?: "low" | "medium" | "high";
     estimatedDuration: number;
     estimatedCalories: number;
 }
@@ -185,6 +190,10 @@ function splitDigitSeparators(input: string): string {
         if (next === out) return out;
         out = next;
     }
+}
+
+function isNumericToken(token: string): boolean {
+    return /^[-+]?\d+(?:\.\d+)?$/.test(token);
 }
 
 function isCardioName(name: string): boolean {
@@ -224,6 +233,202 @@ function cardioMets(name: string, rpe?: number): number {
     return Math.max(3, Math.min(12, mets));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+    if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+    if (typeof value === "string") {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+    }
+    return fallback;
+}
+
+function extractMetric(text: string, pattern: RegExp): { value?: number; text: string } {
+    const m = text.match(pattern);
+    if (!m) return { text };
+    const raw = m.slice(1).find((g) => typeof g === "string" && g.trim().length > 0);
+    const value = Number(raw);
+    return {
+        value: Number.isFinite(value) ? value : undefined,
+        text: text.replace(m[0], " ").replace(/\s+/g, " ").trim(),
+    };
+}
+
+export interface CardioCalorieInput {
+    name: string;
+    userWeight: number;
+    durationMinutes: number;
+    distanceKm?: number;
+    speedKph?: number;
+    inclinePct?: number;
+    avgHeartRate?: number;
+    rpe?: number;
+}
+
+export function estimateCardioCalories(input: CardioCalorieInput): { calories: number; confidence: "low" | "medium" | "high" } {
+    const durationMinutes = Math.max(0, input.durationMinutes || 0);
+    if (durationMinutes <= 0) return { calories: 0, confidence: "low" };
+
+    const durationHours = durationMinutes / 60;
+    const speedKph = input.speedKph && input.speedKph > 0
+        ? input.speedKph
+        : input.distanceKm && input.distanceKm > 0
+            ? input.distanceKm / durationHours
+            : undefined;
+    const distanceKm = input.distanceKm && input.distanceKm > 0
+        ? input.distanceKm
+        : speedKph && speedKph > 0
+            ? speedKph * durationHours
+            : undefined;
+    const inclinePct = Math.max(-3, Math.min(30, input.inclinePct || 0));
+
+    let confidence: "low" | "medium" | "high" = "low";
+    if (speedKph && speedKph > 0 && durationMinutes > 0) confidence = "high";
+    else if (distanceKm && durationMinutes > 0) confidence = "high";
+    else if (input.rpe && input.rpe > 0) confidence = "medium";
+
+    const name = input.name.toLowerCase();
+    const weight = Math.max(30, input.userWeight || 75);
+
+    // ACSM treadmill equation when speed is known (best available estimate).
+    if ((name.includes("러닝") || name.includes("런") || name.includes("treadmill") || name.includes("run") || name.includes("walk") || name.includes("걷기")) && speedKph) {
+        const v = speedKph * 1000 / 60; // m/min
+        const grade = inclinePct / 100;
+        const running = speedKph >= 8;
+        const vo2 = running
+            ? (0.2 * v) + (0.9 * v * grade) + 3.5
+            : (0.1 * v) + (1.8 * v * grade) + 3.5;
+        let kcalPerMin = vo2 * weight / 200;
+        if (input.avgHeartRate && input.avgHeartRate > 0) {
+            const hrAdj = Math.max(-0.08, Math.min(0.18, (input.avgHeartRate - 120) / 300));
+            kcalPerMin *= (1 + hrAdj);
+        }
+        return { calories: Math.max(0, Math.round(kcalPerMin * durationMinutes)), confidence };
+    }
+
+    // Cycling heuristic by speed.
+    if ((name.includes("cycle") || name.includes("bike") || name.includes("사이클") || name.includes("자전거")) && speedKph) {
+        let mets = 5.5;
+        if (speedKph >= 16 && speedKph < 19) mets = 6.8;
+        else if (speedKph >= 19 && speedKph < 22) mets = 8.0;
+        else if (speedKph >= 22 && speedKph < 25) mets = 10.0;
+        else if (speedKph >= 25) mets = 12.0;
+        return { calories: Math.max(0, Math.round(mets * weight * durationHours)), confidence };
+    }
+
+    // Fallback to METs lookup.
+    const mets = cardioMets(input.name, input.rpe);
+    return {
+        calories: Math.max(0, Math.round(mets * weight * durationHours)),
+        confidence: confidence === "low" ? "medium" : confidence,
+    };
+}
+
+export function summarizeCardioFromLogs(logs: unknown, fallbackDurationMinutes = 0): {
+    distanceKm: number;
+    avgSpeedKph: number;
+    avgInclinePct: number;
+    avgHr: number;
+} {
+    if (!Array.isArray(logs) || logs.length === 0) {
+        return { distanceKm: 0, avgSpeedKph: 0, avgInclinePct: 0, avgHr: 0 };
+    }
+
+    let distanceKm = 0;
+    let weightedSpeed = 0;
+    let weightedIncline = 0;
+    let weightedHr = 0;
+    let speedWeight = 0;
+    let inclineWeight = 0;
+    let hrWeight = 0;
+
+    for (const item of logs) {
+        if (!isRecord(item)) continue;
+        const d = toNumber(item["distance_km"], 0);
+        const s = toNumber(item["speed_kph"], 0);
+        const inPct = toNumber(item["incline_pct"], 0);
+        const hr = toNumber(item["avg_hr"], 0);
+        const dur = toNumber(item["duration_minutes"], 0);
+        const w = dur > 0 ? dur : 1;
+
+        distanceKm += d;
+        if (s > 0) {
+            weightedSpeed += s * w;
+            speedWeight += w;
+        }
+        if (inPct !== 0) {
+            weightedIncline += inPct * w;
+            inclineWeight += w;
+        }
+        if (hr > 0) {
+            weightedHr += hr * w;
+            hrWeight += w;
+        }
+    }
+
+    const durationHours = fallbackDurationMinutes > 0 ? fallbackDurationMinutes / 60 : 0;
+    const avgSpeedKph = speedWeight > 0
+        ? weightedSpeed / speedWeight
+        : (distanceKm > 0 && durationHours > 0 ? distanceKm / durationHours : 0);
+
+    return {
+        distanceKm,
+        avgSpeedKph,
+        avgInclinePct: inclineWeight > 0 ? weightedIncline / inclineWeight : 0,
+        avgHr: hrWeight > 0 ? weightedHr / hrWeight : 0,
+    };
+}
+
+export function estimateWorkoutCalories(
+    userWeight: number,
+    durationMinutes: number,
+    avgRpe: number,
+    logs?: unknown,
+): number {
+    if (!Array.isArray(logs) || logs.length === 0) {
+        return calculateCalories(userWeight, durationMinutes, avgRpe);
+    }
+
+    let hasExplicit = false;
+    let total = 0;
+    for (const item of logs) {
+        if (!isRecord(item)) continue;
+        const explicit = toNumber(item["estimated_calories"], 0);
+        if (explicit > 0) {
+            hasExplicit = true;
+            total += explicit;
+            continue;
+        }
+
+        const name = typeof item["name"] === "string" ? item["name"] : "";
+        if (!name || !isCardioName(name)) continue;
+        const d = toNumber(item["duration_minutes"], 0);
+        const dist = toNumber(item["distance_km"], 0);
+        const speed = toNumber(item["speed_kph"], 0);
+        const inPct = toNumber(item["incline_pct"], 0);
+        const hr = toNumber(item["avg_hr"], 0);
+        const rpe = toNumber(item["rpe"], avgRpe || 6);
+        const cal = estimateCardioCalories({
+            name,
+            userWeight,
+            durationMinutes: d > 0 ? d : 0,
+            distanceKm: dist > 0 ? dist : undefined,
+            speedKph: speed > 0 ? speed : undefined,
+            inclinePct: inPct,
+            avgHeartRate: hr > 0 ? hr : undefined,
+            rpe,
+        }).calories;
+        if (cal > 0) total += cal;
+    }
+
+    if (total > 0) return Math.round(total);
+    if (hasExplicit) return Math.round(total);
+    return calculateCalories(userWeight, durationMinutes, avgRpe);
+}
+
 // Format: "Squat 100 5 5 @9" (Name Weight Reps Sets RPE)
 export function parseWorkoutText(text: string, userWeight: number = 75): ParsedWorkout | null {
     let cleanText = text.trim().replace(/^[-*]\s+/, "");
@@ -236,17 +441,53 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
         cleanText = cleanText.replace(rpeMatch[0], "").trim();
     }
 
+    const extractedDuration = extractMetric(cleanText, /(?:^|\s)(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes|분|시간)(?=$|\s)/i);
+    cleanText = extractedDuration.text;
+    const extractedDistance = extractMetric(cleanText, /(?:거리|distance)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:km|킬로(?:미터)?)?|(?:^|\s)(\d+(?:\.\d+)?)\s*(?:km|킬로(?:미터)?)(?=$|\s)/i);
+    cleanText = extractedDistance.text;
+    const extractedSpeed = extractMetric(cleanText, /(?:속도|speed)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:kph|kmh|km\/h)?|(?:^|\s)(\d+(?:\.\d+)?)\s*(?:kph|kmh|km\/h)(?=$|\s)/i);
+    cleanText = extractedSpeed.text;
+    const extractedIncline = extractMetric(cleanText, /(?:incline|경사)\s*([+-]?\d+(?:\.\d+)?)\s*%?/i);
+    cleanText = extractedIncline.text;
+    const extractedHr = extractMetric(cleanText, /(?:hr|심박)\s*([0-9]{2,3})\s*(?:bpm)?(?=$|\s)/i);
+    cleanText = extractedHr.text;
+
     cleanText = splitDigitSeparators(cleanText);
 
-    const parts = cleanText.split(/\s+/);
-    if (parts.length < 2) return null;
+    const parts = cleanText.split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return null;
 
-    let name = parts[0];
+    let tailStart = parts.length;
+    while (tailStart > 0 && isNumericToken(parts[tailStart - 1] ?? "")) {
+        tailStart -= 1;
+    }
+    const nameTokens = parts.slice(0, tailStart);
+    const tailNumbers = parts.slice(tailStart).map((v) => Number(v)).filter((v) => Number.isFinite(v));
+
+    let name = nameTokens.length > 0 ? nameTokens.join(" ") : parts[0] ?? "";
     let weight = 0, reps = 0, sets = 1;
+    const cardio = isCardioName(name);
+
+    if (cardio && tailNumbers.length >= 1) {
+        // Cardio shorthand:
+        // 러닝머신 30
+        // 러닝머신 30 8
+        // 러닝머신 30 8 1
+        weight = tailNumbers[0] ?? 0;
+        reps = tailNumbers[1] ?? 1;
+        sets = tailNumbers[2] ?? 1;
+    } else if (cardio && name && (extractedDuration.value || extractedDistance.value || extractedSpeed.value)) {
+        // Explicit metric-only cardio:
+        // 러닝머신 30분 8km/h
+        // 사이클 speed 20 30분
+        weight = extractedDuration.value ?? 1;
+        reps = 1;
+        sets = 1;
+    }
 
     // Pattern 1: Name... Weight Reps Sets (supports multi-word exercise names)
     // e.g. "벤치 프레스 60 10 5", "Back Squat 100 5 5"
-    if (parts.length >= 4) {
+    else if (parts.length >= 4) {
         name = parts.slice(0, -3).join(" ");
         weight = parseFloat(parts[parts.length - 3]);
         reps = parseFloat(parts[parts.length - 2]);
@@ -276,29 +517,73 @@ export function parseWorkoutText(text: string, userWeight: number = 75): ParsedW
         sets = 1;
     }
 
-    if (isNaN(weight) || isNaN(reps) || isNaN(sets)) return null;
+    if (!name || isNaN(weight) || isNaN(reps) || isNaN(sets)) return null;
 
-    const cardio = isCardioName(name);
+    let distanceKm = extractedDistance.value;
+    let speedKph = extractedSpeed.value;
+    let inclinePct = extractedIncline.value;
+    const avgHr = extractedHr.value;
+
+    // Optional shorthand hints from numeric tail (duration speed incline)
+    if (cardio && !speedKph && tailNumbers.length >= 2) {
+        const maybeSpeed = tailNumbers[1] ?? 0;
+        if (maybeSpeed >= 3 && maybeSpeed <= 30) speedKph = maybeSpeed;
+    }
+    if (cardio && inclinePct === undefined && tailNumbers.length >= 3) {
+        const maybeIncline = tailNumbers[2] ?? 0;
+        if (maybeIncline >= -5 && maybeIncline <= 30) inclinePct = maybeIncline;
+    }
 
     // Auto-Calculate Stats
-    let estimatedDuration = (sets * 3) + 5;
-    if (cardio && reps <= 1 && sets <= 1 && weight > 0) {
-        // Cardio shorthand: "러닝머신 30 1 1" or "러닝머신 30"
+    let estimatedDuration = extractedDuration.value ?? ((sets * 3) + 5);
+    if (cardio && weight > 0 && !extractedDuration.value) {
+        // Cardio shorthand: first number is treated as minutes.
         estimatedDuration = Math.max(5, Math.round(weight));
     }
 
-    // METs Calculation
-    let mets = 4.5;
-    if (cardio) {
-        mets = cardioMets(name, rpe);
-    } else if (weight > 60) {
-        mets = 6.0;
+    if (cardio && speedKph && speedKph > 0 && (!distanceKm || distanceKm <= 0)) {
+        distanceKm = speedKph * (estimatedDuration / 60);
+    }
+    if (cardio && distanceKm && distanceKm > 0 && (!speedKph || speedKph <= 0) && estimatedDuration > 0) {
+        speedKph = distanceKm / (estimatedDuration / 60);
     }
 
-    const durationHours = estimatedDuration / 60;
-    const estimatedCalories = Math.round(mets * userWeight * durationHours);
+    let estimatedCalories = 0;
+    let calorie_confidence: "low" | "medium" | "high" | undefined;
+    if (cardio) {
+        const est = estimateCardioCalories({
+            name,
+            userWeight,
+            durationMinutes: estimatedDuration,
+            distanceKm: distanceKm && distanceKm > 0 ? distanceKm : undefined,
+            speedKph: speedKph && speedKph > 0 ? speedKph : undefined,
+            inclinePct: inclinePct ?? undefined,
+            avgHeartRate: avgHr && avgHr > 0 ? avgHr : undefined,
+            rpe,
+        });
+        estimatedCalories = est.calories;
+        calorie_confidence = est.confidence;
+    } else {
+        let mets = 4.5;
+        if (weight > 60) mets = 6.0;
+        estimatedCalories = Math.round(mets * userWeight * (estimatedDuration / 60));
+        calorie_confidence = "medium";
+    }
 
-    return { name, weight, reps, sets, rpe, estimatedDuration, estimatedCalories };
+    return {
+        name,
+        weight,
+        reps,
+        sets,
+        rpe,
+        distance_km: distanceKm && distanceKm > 0 ? Number(distanceKm.toFixed(3)) : undefined,
+        speed_kph: speedKph && speedKph > 0 ? Number(speedKph.toFixed(2)) : undefined,
+        incline_pct: inclinePct,
+        avg_hr: avgHr,
+        calorie_confidence,
+        estimatedDuration,
+        estimatedCalories,
+    };
 }
 
 // Legacy helper if needed

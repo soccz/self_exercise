@@ -18,7 +18,7 @@ export async function GET() {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase
     .from("workouts")
-    .select("id, user_id, routine_id, workout_date, title, total_volume, average_rpe, duration_minutes, logs, feedback, mood, created_at")
+    .select("id, user_id, routine_id, workout_date, title, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, cardio_avg_speed_kph, cardio_avg_incline_pct, avg_heart_rate, logs, feedback, mood, created_at")
     .eq("user_id", SINGLE_PLAYER_ID)
     .order("workout_date", { ascending: false });
 

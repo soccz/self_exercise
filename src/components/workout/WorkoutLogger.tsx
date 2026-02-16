@@ -179,12 +179,12 @@ export function WorkoutLogger({ isOpen, onClose }: WorkoutLoggerProps) {
                                 <textarea
                                     value={raw}
                                     onChange={(e) => setRaw(e.target.value)}
-                                    placeholder={goalMode === "fat_loss" ? "러닝머신 30 1 1\n빠르게걷기 25 1 1\n사이클 35 1 1" : "스쿼트 100 5 5\n벤치 60x10x5 @9\n데드 120 5 5"}
+                                    placeholder={goalMode === "fat_loss" ? "러닝머신 30 8 1\n러닝머신 30분 8km/h 경사 1\n사이클 35분 20km/h" : "스쿼트 100 5 5\n벤치 60x10x5 @9\n데드 120 5 5"}
                                     className="w-full min-h-28 resize-y border border-gray-200 dark:border-gray-700 rounded-2xl px-4 py-3 bg-transparent dark:text-white placeholder-gray-300"
                                 />
                                 <p className="text-xs text-gray-400 mt-2">
                                     {goalMode === "fat_loss"
-                                        ? "Tip: `러닝머신 30 1 1`, `사이클 40 1 1`처럼 시간(분)을 첫 숫자로 넣어 기록할 수 있습니다."
+                                        ? "Tip: `러닝머신 30 8 1`(시간/속도/경사) 또는 `러닝머신 30분 8km/h`처럼 입력하면 칼로리/거리 계산 정확도가 올라갑니다."
                                         : "Tip: `벤치 60x10x5`, `벤치 60 10 5`, `@9` 모두 지원합니다."}
                                 </p>
                             </div>

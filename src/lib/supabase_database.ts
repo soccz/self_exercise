@@ -51,6 +51,11 @@ export interface Database {
           total_volume: number | string | null;
           average_rpe: number | string | null;
           duration_minutes: number | null;
+          estimated_calories: number | string | null;
+          cardio_distance_km: number | string | null;
+          cardio_avg_speed_kph: number | string | null;
+          cardio_avg_incline_pct: number | string | null;
+          avg_heart_rate: number | null;
           logs: Json | null;
           feedback: string | null;
           mood: string | null;
@@ -60,6 +65,38 @@ export interface Database {
           user_id: string;
         };
         Update: Partial<Omit<Database["public"]["Tables"]["workouts"]["Row"], "id" | "created_at">>;
+        Relationships: [];
+      };
+      daily_conditions: {
+        Row: {
+          id: string;
+          user_id: string | null;
+          condition_date: string;
+          sleep_hours: number | string | null;
+          fatigue_score: number | null;
+          stress_score: number | null;
+          soreness_score: number | null;
+          resting_hr: number | null;
+          notes: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Partial<Omit<Database["public"]["Tables"]["daily_conditions"]["Row"], "id" | "created_at" | "updated_at">>;
+        Update: Partial<Omit<Database["public"]["Tables"]["daily_conditions"]["Row"], "id" | "created_at" | "updated_at">>;
+        Relationships: [];
+      };
+      advice_logs: {
+        Row: {
+          id: string;
+          user_id: string | null;
+          event_date: string;
+          source: string;
+          mode: string | null;
+          advice_json: Json;
+          created_at: string;
+        };
+        Insert: Partial<Omit<Database["public"]["Tables"]["advice_logs"]["Row"], "id" | "created_at">>;
+        Update: Partial<Omit<Database["public"]["Tables"]["advice_logs"]["Row"], "id" | "created_at">>;
         Relationships: [];
       };
       routines: {

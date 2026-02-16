@@ -48,7 +48,7 @@ export async function GET(req: Request) {
       .single(),
     supabase
       .from("workouts")
-      .select("id, workout_date, title, total_volume, average_rpe, duration_minutes, logs, feedback, mood, created_at")
+      .select("id, workout_date, title, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, cardio_avg_speed_kph, cardio_avg_incline_pct, avg_heart_rate, logs, feedback, mood, created_at")
       .eq("user_id", SINGLE_PLAYER_ID)
       .order("workout_date", { ascending: false }),
   ]);
@@ -82,6 +82,11 @@ export async function GET(req: Request) {
       "total_volume",
       "average_rpe",
       "duration_minutes",
+      "estimated_calories",
+      "cardio_distance_km",
+      "cardio_avg_speed_kph",
+      "cardio_avg_incline_pct",
+      "avg_heart_rate",
       "mood",
       "feedback",
       "created_at",
@@ -97,6 +102,11 @@ export async function GET(req: Request) {
         csvEscape(w.total_volume),
         csvEscape(w.average_rpe),
         csvEscape(w.duration_minutes),
+        csvEscape((w as Record<string, unknown>).estimated_calories),
+        csvEscape((w as Record<string, unknown>).cardio_distance_km),
+        csvEscape((w as Record<string, unknown>).cardio_avg_speed_kph),
+        csvEscape((w as Record<string, unknown>).cardio_avg_incline_pct),
+        csvEscape((w as Record<string, unknown>).avg_heart_rate),
         csvEscape(w.mood ?? ""),
         csvEscape(w.feedback ?? ""),
         csvEscape(w.created_at ?? ""),

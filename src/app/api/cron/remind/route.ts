@@ -158,7 +158,7 @@ export async function POST(req: Request) {
     }
 
     const sent = await sendMessage(chatId, goalMode === "fat_loss"
-      ? `⏰ *${name}* 오늘 유산소 기록이 없습니다.\n\n예: \`러닝머신 30 1 1\`\n또는 앱에서 기록 버튼을 눌러주세요.`
+      ? `⏰ *${name}* 오늘 유산소 기록이 없습니다.\n\n예: \`러닝머신 30 8 1\`\n또는 앱에서 기록 버튼을 눌러주세요.`
       : `⏰ *${name}* 오늘 운동 기록이 없습니다.\n\n예: \`스쿼트 100 5 5\`\n또는 앱에서 기록 버튼을 눌러주세요.`);
 
     if (!sent) {

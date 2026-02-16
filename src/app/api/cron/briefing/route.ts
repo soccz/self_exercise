@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { getSupabaseAdmin, SINGLE_PLAYER_ID } from "@/lib/server/supabase_admin";
 import { newRequestId } from "@/lib/server/request_id";
 import { rateLimit } from "@/lib/server/rate_limit";
-import { analyzePreMarket } from "@/lib/quant/coach";
-import { calculateCalories } from "@/lib/quant/engine";
+import { estimateWorkoutCalories } from "@/lib/quant/engine";
+import { consultCouncil } from "@/lib/quant/ensemble";
+import type { CouncilCondition, CouncilWorkout } from "@/lib/quant/types";
+import type { Json } from "@/lib/supabase_database";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -105,7 +107,7 @@ export async function POST(req: Request) {
         // 3. User Check & Config
         const { data: user, error: userError } = await supabase
             .from("users")
-            .select("telegram_chat_id, telegram_remind_enabled, telegram_timezone, full_name, goal_mode, weight")
+            .select("telegram_chat_id, telegram_remind_enabled, telegram_timezone, full_name, goal_mode, weight, current_streak")
             .eq("id", SINGLE_PLAYER_ID)
             .single();
 
@@ -134,65 +136,120 @@ export async function POST(req: Request) {
             return NextResponse.json({ requestId, ok: true, skipped: "already_logged" });
         }
 
-        // 5. Generate Briefing (mode-aware)
+        // 5. Generate Briefing (mode-aware council)
         const safeName = escapeTelegramMarkdown(user.full_name ?? "Iron Quant");
-        const msg = await (async (): Promise<string | null> => {
-            if (goalMode === "fat_loss") {
-                const start = addDays(today, -6);
-                const { data: rows, error: wErr } = await supabase
-                    .from("workouts")
-                    .select("duration_minutes, average_rpe")
-                    .eq("user_id", SINGLE_PLAYER_ID)
-                    .gte("workout_date", start)
-                    .lte("workout_date", today);
+        const historyStart = addDays(today, -27);
+        const weekStart = addDays(today, -6);
+        const [{ data: rows, error: wErr }, { data: conditions, error: cErr }] = await Promise.all([
+            supabase
+                .from("workouts")
+                .select("workout_date, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, logs")
+                .eq("user_id", SINGLE_PLAYER_ID)
+                .gte("workout_date", historyStart)
+                .lte("workout_date", today)
+                .order("workout_date", { ascending: true }),
+            supabase
+                .from("daily_conditions")
+                .select("condition_date, sleep_hours, fatigue_score, stress_score, soreness_score, resting_hr")
+                .eq("user_id", SINGLE_PLAYER_ID)
+                .gte("condition_date", addDays(today, -13))
+                .lte("condition_date", today)
+                .order("condition_date", { ascending: true }),
+        ]);
 
-                if (wErr) {
-                    console.error("cron briefing: fat mode workout query failed", wErr);
-                    return null;
-                }
+        if (wErr) {
+            console.error("cron briefing: workout query failed", wErr);
+            return NextResponse.json({ requestId, ok: false, error: wErr.message }, { status: 500 });
+        }
 
-                const workouts = rows ?? [];
-                const minutes = workouts.reduce((acc, w) => acc + (Number(w.duration_minutes) || 0), 0);
-                const calories = workouts.reduce(
-                    (acc, w) => acc + calculateCalories(Number(user.weight) || 75, Number(w.duration_minutes) || 0, Number(w.average_rpe) || 6),
-                    0,
-                );
-                const remain = Math.max(0, 150 - Math.round(minutes));
-                const nextAction = remain > 0
-                    ? `오늘 *${Math.min(30, remain)}분*만 걸으면 주간 목표에 더 가까워집니다.`
-                    : "오늘은 20분 회복 유산소로 흐름만 유지하세요.";
-
-                return [
-                    `*🔔 Iron Quant 감량 브리핑*`,
-                    `기준: ${safeName}`,
-                    ``,
-                    `- 최근 7일 유산소: *${Math.round(minutes)}분* / 150분`,
-                    `- 최근 7일 추정 소모: *${Math.round(calories).toLocaleString()} kcal*`,
-                    ``,
-                    `💬 *오늘 액션*: ${nextAction}`,
-                ].join("\n");
-            }
-
-            const briefing = await analyzePreMarket(supabase, SINGLE_PLAYER_ID);
-            if (!briefing) return null;
-
-            const icon = briefing.trend === "Bullish" ? "📈" : briefing.trend === "Bearish" ? "📉" : "⚖";
-            return [
-                `*🔔 Iron Quant 근육 브리핑*`,
-                `기준: ${safeName}`,
-                ``,
-                `*${briefing.ticker} (Target)*`,
-                `${icon} 추세: *${briefing.trend}*`,
-                `종가: ${briefing.last_price}kg`,
-                `목표가: *${briefing.target_price}kg*`,
-                ``,
-                `💬 *Analyst Note*:`,
-                `${briefing.advice}`,
-            ].join("\n");
+        const safeConditions = cErr
+            ? (cErr.message.includes("daily_conditions") && cErr.message.includes("does not exist") ? [] : [])
+            : (conditions ?? []);
+        const userWeight = Number(user.weight) || 75;
+        const streak = Number(user.current_streak) || 0;
+        const workoutRows = rows ?? [];
+        const weekRows = workoutRows.filter((w) => (w.workout_date ?? "") >= weekStart);
+        const weekMinutes = weekRows.reduce((acc, w) => acc + (Number(w.duration_minutes) || 0), 0);
+        const weekDistance = weekRows.reduce((acc, w) => acc + (Number(w.cardio_distance_km) || 0), 0);
+        const weekCalories = weekRows.reduce((acc, w) => (
+            acc + ((Number(w.estimated_calories) || 0) > 0
+                ? (Number(w.estimated_calories) || 0)
+                : estimateWorkoutCalories(userWeight, Number(w.duration_minutes) || 0, Number(w.average_rpe) || 6, w.logs))
+        ), 0);
+        const weekVolume = weekRows.reduce((acc, w) => acc + (Number(w.total_volume) || 0), 0);
+        const weekAvgRpe = (() => {
+            const vals = weekRows.map((w) => Number(w.average_rpe) || 0).filter((v) => v > 0);
+            if (vals.length === 0) return 0;
+            return vals.reduce((a, b) => a + b, 0) / vals.length;
         })();
 
-        if (!msg) {
+        const council = consultCouncil({
+            now: new Date(`${today}T00:00:00Z`),
+            user: {
+                id: SINGLE_PLAYER_ID,
+                mode: goalMode,
+                weight: userWeight,
+                current_streak: streak,
+            },
+            workouts: workoutRows.map((w) => ({
+                workout_date: w.workout_date ?? today,
+                total_volume: Number(w.total_volume) || 0,
+                average_rpe: Number(w.average_rpe) || 0,
+                duration_minutes: Number(w.duration_minutes) || 0,
+                estimated_calories: Number(w.estimated_calories) || 0,
+                cardio_distance_km: Number(w.cardio_distance_km) || 0,
+            })) as CouncilWorkout[],
+            conditions: safeConditions.map((c) => ({
+                condition_date: c.condition_date,
+                sleep_hours: Number(c.sleep_hours) || undefined,
+                fatigue_score: c.fatigue_score ?? undefined,
+                stress_score: c.stress_score ?? undefined,
+                soreness_score: c.soreness_score ?? undefined,
+                resting_hr: c.resting_hr ?? undefined,
+            })) as CouncilCondition[],
+        });
+
+        if (council.top.length === 0 || !council.primary) {
             return NextResponse.json({ requestId, ok: true, skipped: "no_analysis_data" });
+        }
+
+        const agentLabel = (agent: string) => agent === "analyst" ? "Analyst" : agent === "physio" ? "Physio" : "Psych";
+        const lines: string[] = [];
+        lines.push(goalMode === "fat_loss" ? "*🔔 Iron Quant Council 브리핑 (감량)*" : "*🔔 Iron Quant Council 브리핑 (근육)*");
+        lines.push(`기준: ${safeName}`);
+        lines.push("");
+        if (goalMode === "fat_loss") {
+            lines.push(`- 최근 7일 유산소: *${Math.round(weekMinutes)}분* / 150분`);
+            lines.push(`- 최근 7일 이동거리: *${weekDistance.toFixed(1)}km*`);
+            lines.push(`- 최근 7일 추정 소모: *${Math.round(weekCalories).toLocaleString()} kcal*`);
+        } else {
+            lines.push(`- 최근 7일 총 볼륨: *${Math.round(weekVolume).toLocaleString()}kg*`);
+            lines.push(`- 최근 7일 세션: *${weekRows.length}회*`);
+            if (weekAvgRpe > 0) lines.push(`- 최근 평균 RPE: *${weekAvgRpe.toFixed(1)}*`);
+        }
+        lines.push("");
+        lines.push(`*최우선 액션*: ${council.primary.action}`);
+        if (council.primary.reason.length > 0) lines.push(`근거: ${council.primary.reason[0]}`);
+        lines.push("");
+        lines.push("*Council Minutes*");
+        for (const advice of council.top.slice(0, 3)) {
+            lines.push(`- [${agentLabel(advice.agent)}] ${advice.headline}`);
+        }
+
+        const msg = lines.join("\n");
+
+        // Non-fatal audit log
+        const { error: logErr } = await supabase
+            .from("advice_logs")
+            .insert({
+                user_id: SINGLE_PLAYER_ID,
+                event_date: today,
+                source: "briefing",
+                mode: goalMode,
+                advice_json: council.top as unknown as Json,
+            });
+        if (logErr && !logErr.message.includes("advice_logs")) {
+            console.error("cron briefing: advice log failed", logErr);
         }
 
         const sent = await sendMessage(user.telegram_chat_id, msg);

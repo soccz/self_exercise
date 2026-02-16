@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/supabase_database";
 import type { GoalMode } from "@/lib/data/types";
-import { calculateCalories } from "@/lib/quant/engine";
+import { estimateWorkoutCalories } from "@/lib/quant/engine";
 
 type WorkoutRow = Database["public"]["Tables"]["workouts"]["Row"];
 type UserRow = Database["public"]["Tables"]["users"]["Row"];
@@ -124,7 +124,7 @@ export async function buildMonthlyTelegramReport(
   const [{ data: workouts, error: wErr }, { data: user, error: uErr }] = await Promise.all([
     supabase
       .from("workouts")
-      .select("workout_date, total_volume, average_rpe, duration_minutes, logs, title")
+      .select("workout_date, total_volume, average_rpe, duration_minutes, estimated_calories, cardio_distance_km, logs, title")
       .eq("user_id", userId)
       .gte("workout_date", start)
       .lte("workout_date", end)
@@ -149,8 +149,11 @@ export async function buildMonthlyTelegramReport(
   const sessions = rows.length;
   const totalVolume = rows.reduce((acc, r) => acc + toNumber(r.total_volume, 0), 0);
   const totalMinutes = rows.reduce((acc, r) => acc + toNumber(r.duration_minutes, 0), 0);
+  const totalDistance = rows.reduce((acc, r) => acc + toNumber(r.cardio_distance_km, 0), 0);
   const totalCalories = rows.reduce(
-    (acc, r) => acc + calculateCalories(userWeight, toNumber(r.duration_minutes, 0), toNumber(r.average_rpe, 0)),
+    (acc, r) => acc + (toNumber(r.estimated_calories, 0) > 0
+      ? toNumber(r.estimated_calories, 0)
+      : estimateWorkoutCalories(userWeight, toNumber(r.duration_minutes, 0), toNumber(r.average_rpe, 0), r.logs)),
     0,
   );
   const avgRpe = (() => {
@@ -251,6 +254,7 @@ export async function buildMonthlyTelegramReport(
     lines.push("");
     lines.push(`- 활동: *${activeDays}일* | 세션: *${sessions}회*`);
     lines.push(`- 유산소 시간: *${Math.round(totalMinutes)}분*`);
+    if (totalDistance > 0) lines.push(`- 이동거리: *${totalDistance.toFixed(1)}km*`);
     lines.push(`- 추정 소모 칼로리: *${Math.round(totalCalories).toLocaleString()} kcal*`);
     if (avgRpe !== null) lines.push(`- 평균 RPE: *${avgRpe.toFixed(1)}*`);
     lines.push(`- 주간 시간 흐름: \`${sparkline(minuteBuckets)}\``);
