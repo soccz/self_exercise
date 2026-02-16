@@ -27,12 +27,18 @@ export async function GET(req: Request) {
     const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
     const APP_SECRET = process.env.APP_SECRET;
     const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+    const BUILD_SHA = process.env.VERCEL_GIT_COMMIT_SHA || null;
+    const BUILD_SHORT = BUILD_SHA ? BUILD_SHA.slice(0, 7) : null;
+    const APP_URL = process.env.APP_URL || null;
 
     status.env = {
         SUPABASE_URL: !!SUPABASE_URL,
         SUPABASE_SERVICE_ROLE_KEY: !!SUPABASE_SERVICE_ROLE_KEY,
         APP_SECRET: !!APP_SECRET,
         BOT_TOKEN: !!BOT_TOKEN,
+        BUILD_SHA,
+        BUILD_SHORT,
+        APP_URL,
     };
 
     if (!SUPABASE_URL) errors.push("Missing SUPABASE_URL");
